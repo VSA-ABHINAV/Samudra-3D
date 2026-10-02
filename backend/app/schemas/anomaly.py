@@ -36,6 +36,8 @@ class AnomalyFieldResponse(BaseModel):
     threshold: float = Field(..., description="Alert threshold applied")
     depth_min: float = Field(0.0, description="Minimum depth filter applied (m)")
     depth_max: float = Field(4000.0, description="Maximum depth filter applied (m)")
+    dataset_id: str = Field(..., description="Active dataset identifier")
+    source_mode: str = Field("ALL", description="Observation source mode: REAL_LOCAL, SYNTHETIC, or ALL")
     points: List[AnomalyPoint] = Field(default_factory=list)
     coverage_bins: List[CoverageBin] = Field(default_factory=list)
     alert_count: int = Field(0, description="Number of points where |delta| >= threshold")

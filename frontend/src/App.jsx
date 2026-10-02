@@ -19,6 +19,7 @@ import DatasetManagerModal from './components/DatasetManagerModal.jsx';
 import FishermanModeModal from './components/FishermanModeModal.jsx';
 import CycloneModeModal from './components/CycloneModeModal.jsx';
 import InDepthOceanModal from './components/InDepthOceanModal.jsx';
+import CrossSectionModal from './components/CrossSectionModal.jsx';
 import {
   fetchAnomalyField,
   fetchArgoFloats,
@@ -74,7 +75,7 @@ export default function App() {
   }
   const [showCurrents, setShowCurrents] = useState(false);
   const [showArgo, setShowArgo] = useState(false);
-  const [insituSourceMode, _setInsituSourceMode] = useState('REAL_LOCAL');
+  const [insituSourceMode, setInsituSourceMode] = useState('REAL_LOCAL');
   const [argoFloats, setArgoFloats] = useState([]);
   const [selectedFloat, setSelectedFloat] = useState(null);
   const [showGliders, setShowGliders] = useState(false);
@@ -83,9 +84,26 @@ export default function App() {
 
   // 3D Difference Field & Anomaly Heatmap state
   const [showAnomalyField, setShowAnomalyField] = useState(false);
-  const [anomalyVariable, _setAnomalyVariable] = useState('temperature');
-  const [anomalyThreshold, _setAnomalyThreshold] = useState(0.5);
+  const [anomalyVariable, setAnomalyVariable] = useState('temperature');
+  const [tempThreshold, setTempThreshold] = useState(0.5);
+  const [salThreshold, setSalThreshold] = useState(0.1);
   const [anomalyData, setAnomalyData] = useState(null);
+  const [isAnomalyLoading, setIsAnomalyLoading] = useState(false);
+  const [anomalyError, setAnomalyError] = useState(null);
+  const [anomalyRetryCount, setAnomalyRetryCount] = useState(0);
+
+  const activeAnomalyThreshold = anomalyVariable === 'temperature' ? tempThreshold : salThreshold;
+  const setAnomalyThreshold = useCallback((val) => {
+    if (anomalyVariable === 'temperature') {
+      setTempThreshold(val);
+    } else {
+      setSalThreshold(val);
+    }
+  }, [anomalyVariable]);
+
+  const handleChangeAnomalyVariable = useCallback((v) => {
+    setAnomalyVariable(v);
+  }, []);
 
   // Modern Dual View Modes, Click-to-Probe & ODV Transect state
   const [viewMode, setViewMode] = useState('globe'); // 'globe' | 'block'
@@ -105,6 +123,12 @@ export default function App() {
   const [isFishermanModalOpen, setIsFishermanModalOpen] = useState(false);
   const [isCycloneModalOpen, setIsCycloneModalOpen] = useState(false);
   const [isInDepthModalOpen, setIsInDepthModalOpen] = useState(false);
+  const [isCrossSectionModalOpen, setIsCrossSectionModalOpen] = useState(false);
+  const [transectData, setTransectData] = useState(null);
+  const [isTransectLoading, setIsTransectLoading] = useState(false);
+  const [transectError, setTransectError] = useState(null);
+  const transectRequestIdRef = useRef(0);
+  const transectAbortControllerRef = useRef(null);
   const [targetRegion, setTargetRegion] = useState(null);
   const [selectedSectorId, setSelectedSectorId] = useState('macro-nio');
 
@@ -221,6 +245,16 @@ export default function App() {
     setProbeData(null);
     setIsProbeLoading(false);
 
+    // Invalidate in-flight transect requests and clear previous dataset section
+    transectRequestIdRef.current++;
+    if (transectAbortControllerRef.current) {
+      transectAbortControllerRef.current.abort();
+    }
+    setTransectData(null);
+    setActiveTransect(null);
+    setIsTransectLoading(false);
+    setTransectError(null);
+
     try {
       let confirmedDataset = null;
       let availableList = fallbackDatasets;
@@ -308,15 +342,18 @@ export default function App() {
         return closest;
       });
 
-      // Reconcile variable if currents not supported or variable not in new dataset
+      // Reconcile variable and vector capability
+      const lowerVars = newVars.map((v) => v.toLowerCase());
+      const hasCurrents = lowerVars.some((v) => ['currents', 'velocity', 'flow'].includes(v)) ||
+        (lowerVars.some((v) => ['uo', 'u', 'vozocrtx', 'ucur'].includes(v)) &&
+         lowerVars.some((v) => ['vo', 'v', 'vomecrty', 'vcur'].includes(v)));
+      if (!hasCurrents) {
+        // Dataset has no complete velocity vector components — clear streamline overlay
+        setShowCurrents(false);
+      }
       setSelectedVariable((prev) => {
-        if (prev === 'currents') {
-          const hasCurrents = newVars.some((v) => ['currents', 'uo', 'vo', 'u', 'v'].includes(v.toLowerCase()));
-          if (!hasCurrents) {
-            setShowCurrents(false);
-            return newVars[0] || 'temperature';
-          }
-          return prev;
+        if (prev === 'currents' && !hasCurrents) {
+          return newVars[0] || 'temperature';
         }
         if (newVars.length === 0 || newVars.includes(prev)) return prev;
         return newVars[0] || 'temperature';
@@ -783,27 +820,85 @@ export default function App() {
     }
   }, [argoFloats, gliderTransects, handleSelectFloat, handleSelectGlider]);
 
+  // Anomaly request transaction ref to guard against out-of-order async responses
+  const anomalyRequestIdRef = useRef(0);
+
   // 3D Difference Field & Anomaly Heatmap state
   useEffect(() => {
-    if (!showAnomalyField) return;
-    let ignore = false;
+    if (!showAnomalyField || !isDatasetReady || isTransitioningDataset || Boolean(datasetTransitionError)) {
+      setAnomalyData(null);
+      setIsAnomalyLoading(false);
+      setAnomalyError(null);
+      return;
+    }
+
+    const reqId = ++anomalyRequestIdRef.current;
+    const controller = new AbortController();
+
+    // Immediately clear prior field and metrics on variable/threshold/source/dataset change
+    setAnomalyData(null);
+    setIsAnomalyLoading(true);
+    setAnomalyError(null);
+
+    const expectedVar = anomalyVariable;
+    const expectedSource = insituSourceMode;
+    const expectedThreshold = activeAnomalyThreshold;
+    const expectedDatasetId = activeDataset?.dataset_id || null;
+
     fetchAnomalyField({
       variable: anomalyVariable,
-      threshold: anomalyThreshold
+      threshold: activeAnomalyThreshold,
+      source_mode: insituSourceMode,
+      signal: controller.signal
     })
       .then((data) => {
-        if (!ignore && data) {
-          setAnomalyData(data);
+        if (anomalyRequestIdRef.current === reqId && data) {
+          // Strict provenance verification: response must match requested variable, exact source_mode, finite threshold within tolerance, and non-empty confirmed dataset_id
+          const matchesVar = typeof data.variable === 'string' && data.variable === expectedVar;
+          const matchesSource = typeof data.source_mode === 'string' && data.source_mode === expectedSource;
+          const matchesThreshold = typeof data.threshold === 'number' && Number.isFinite(data.threshold) && Math.abs(data.threshold - expectedThreshold) < 1e-4;
+          const matchesDataset = Boolean(expectedDatasetId && typeof data.dataset_id === 'string' && data.dataset_id.trim() !== '' && data.dataset_id === expectedDatasetId);
+
+          if (matchesVar && matchesSource && matchesThreshold && matchesDataset) {
+            setAnomalyData(data);
+            setIsAnomalyLoading(false);
+            setAnomalyError(null);
+          } else {
+            console.warn('Anomaly response provenance mismatch:', {
+              expected: { var: expectedVar, source: expectedSource, threshold: expectedThreshold, dataset: expectedDatasetId },
+              received: { var: data.variable, source: data.source_mode, threshold: data.threshold, dataset: data.dataset_id }
+            });
+            setAnomalyData(null);
+            setIsAnomalyLoading(false);
+            setAnomalyError('Received invalid or mismatched anomaly response provenance');
+          }
         }
       })
       .catch((err) => {
-        console.warn('Could not fetch anomaly field:', err);
+        if (err.name === 'AbortError') return;
+        if (anomalyRequestIdRef.current === reqId) {
+          console.warn('Could not fetch anomaly field:', err);
+          setAnomalyData(null);
+          setIsAnomalyLoading(false);
+          setAnomalyError(err.message || 'Failed to load anomaly field');
+        }
       });
 
     return () => {
-      ignore = true;
+      anomalyRequestIdRef.current = reqId + 1;
+      controller.abort();
     };
-  }, [showAnomalyField, anomalyVariable, anomalyThreshold]);
+  }, [
+    showAnomalyField,
+    anomalyVariable,
+    activeAnomalyThreshold,
+    insituSourceMode,
+    activeDataset?.dataset_id,
+    isDatasetReady,
+    isTransitioningDataset,
+    datasetTransitionError,
+    anomalyRetryCount
+  ]);
 
   const handleSelectAnomalyPoint = useCallback((point) => {
     if (!point) return;
@@ -831,9 +926,9 @@ export default function App() {
     }
   }, [handleSelectFloat, handleSelectGlider]);
 
-  // Load Argo floats and registered custom sensors when layer is enabled
+  // Load Argo floats and registered custom sensors when layer is enabled or drawer is open
   useEffect(() => {
-    if (!showArgo) return;
+    if (!showArgo && !isObservationDrawerOpen) return;
 
     let ignore = false;
     Promise.all([
@@ -861,14 +956,14 @@ export default function App() {
     return () => {
       ignore = true;
     };
-  }, [showArgo, insituSourceMode]);
+  }, [showArgo, isObservationDrawerOpen, insituSourceMode]);
 
-  // Load Glider transects when layer is enabled
+  // Load Glider transects when layer is enabled or drawer is open
   useEffect(() => {
-    if (!showGliders) return;
+    if (!showGliders && !isObservationDrawerOpen) return;
 
     let ignore = false;
-    fetchGliderTransects({ source_mode: insituSourceMode === 'SYNTHETIC' ? 'SYNTHETIC' : 'REAL_LOCAL' })
+    fetchGliderTransects({ source_mode: insituSourceMode })
       .then((data) => {
         if (!ignore && data) {
           setGliderTransects(data);
@@ -881,13 +976,12 @@ export default function App() {
     return () => {
       ignore = true;
     };
-  }, [showGliders, insituSourceMode]);
+  }, [showGliders, isObservationDrawerOpen, insituSourceMode]);
 
   const handleSelectVariable = useCallback((varId) => {
     setSelectedVariable(varId);
-    if (varId === 'currents') {
-      setShowCurrents(true);
-    }
+    // Selecting the 'currents' scalar field shows current-speed values but
+    // does NOT silently enable streamlines — the user controls that independently.
   }, []);
 
   // Single managed playback timer
@@ -975,24 +1069,134 @@ export default function App() {
     }
   }, [handleProbePoint]);
 
-  // ODV Vertical Transect Handler
-  const _handleTriggerSampleTransect = useCallback(() => {
-    setViewMode('block');
+  // User-chosen Ocean Cross-Section & Vertical Transect Handlers
+  const handleRequestTransect = useCallback(({ lat1, lon1, lat2, lon2, variable, time_idx }) => {
+    if (!isDatasetReady || isTransitioningDataset || Boolean(datasetTransitionError)) {
+      setTransectError('Dataset is not ready or transition is in progress');
+      return;
+    }
+
+    if (transectAbortControllerRef.current) {
+      transectAbortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    transectAbortControllerRef.current = controller;
+
+    const reqId = ++transectRequestIdRef.current;
+    setIsTransectLoading(true);
+    setTransectError(null);
+    setTransectData(null);
+    setActiveTransect(null);
+
+    const expectedDatasetId = activeDataset?.dataset_id || null;
+    const expectedVar = variable || selectedVariable;
+    const expectedTime = time_idx ?? timeIndex;
+    const expectedLat1 = lat1;
+    const expectedLon1 = lon1;
+    const expectedLat2 = lat2;
+    const expectedLon2 = lon2;
+
     fetchOceanTransect({
-      lat1: 5.0,
-      lon1: 80.0,
-      lat2: 18.0,
-      lon2: 88.0,
-      time_idx: timeIndex,
-      variable: selectedVariable
+      lat1: expectedLat1,
+      lon1: expectedLon1,
+      lat2: expectedLat2,
+      lon2: expectedLon2,
+      variable: expectedVar,
+      time_idx: expectedTime,
+      signal: controller.signal
     })
       .then((data) => {
-        setActiveTransect(data);
+        if (transectRequestIdRef.current === reqId && data) {
+          // Strict complete provenance verification:
+          // non-empty dataset_id, exact variable, integer time_idx, and endpoints within small tolerance
+          const matchesDataset = Boolean(expectedDatasetId && typeof data.dataset_id === 'string' && data.dataset_id.trim() !== '' && data.dataset_id === expectedDatasetId);
+          const matchesVar = typeof data.variable === 'string' && data.variable === expectedVar;
+          const matchesTime = typeof data.time_idx === 'number' && Number.isInteger(data.time_idx) && data.time_idx === expectedTime;
+          const matchesLat1 = typeof data.lat1 === 'number' && Number.isFinite(data.lat1) && Math.abs(data.lat1 - expectedLat1) < 1e-3;
+          const matchesLon1 = typeof data.lon1 === 'number' && Number.isFinite(data.lon1) && Math.abs(data.lon1 - expectedLon1) < 1e-3;
+          const matchesLat2 = typeof data.lat2 === 'number' && Number.isFinite(data.lat2) && Math.abs(data.lat2 - expectedLat2) < 1e-3;
+          const matchesLon2 = typeof data.lon2 === 'number' && Number.isFinite(data.lon2) && Math.abs(data.lon2 - expectedLon2) < 1e-3;
+
+          if (matchesDataset && matchesVar && matchesTime && matchesLat1 && matchesLon1 && matchesLat2 && matchesLon2) {
+            setTransectData(data);
+            setActiveTransect(data);
+            setIsTransectLoading(false);
+            setTransectError(null);
+          } else {
+            console.warn('Transect provenance mismatch:', {
+              expected: { dataset: expectedDatasetId, var: expectedVar, time: expectedTime, lat1: expectedLat1, lon1: expectedLon1, lat2: expectedLat2, lon2: expectedLon2 },
+              received: { dataset: data.dataset_id, var: data.variable, time: data.time_idx, lat1: data.lat1, lon1: data.lon1, lat2: data.lat2, lon2: data.lon2 }
+            });
+            setTransectData(null);
+            setActiveTransect(null);
+            setIsTransectLoading(false);
+            setTransectError('Received invalid or mismatched transect response provenance');
+          }
+        }
       })
       .catch((err) => {
-        console.warn('Transect fetch error:', err);
+        if (err.name === 'AbortError') return;
+        if (transectRequestIdRef.current === reqId) {
+          console.warn('Transect fetch failed:', err);
+          setTransectData(null);
+          setActiveTransect(null);
+          setIsTransectLoading(false);
+          setTransectError(err.message || 'Failed to compute cross-section transect');
+        }
       });
-  }, [timeIndex, selectedVariable]);
+  }, [isDatasetReady, isTransitioningDataset, datasetTransitionError, activeDataset?.dataset_id, selectedVariable, timeIndex]);
+
+  const handleClearTransect = useCallback(() => {
+    if (transectAbortControllerRef.current) {
+      transectAbortControllerRef.current.abort();
+    }
+    transectRequestIdRef.current++;
+    setTransectData(null);
+    setActiveTransect(null);
+    setTransectError(null);
+    setIsTransectLoading(false);
+  }, []);
+
+  const handleCloseCrossSectionModal = useCallback(() => {
+    if (transectAbortControllerRef.current) {
+      transectAbortControllerRef.current.abort();
+    }
+    transectRequestIdRef.current++;
+    setIsCrossSectionModalOpen(false);
+    setTransectData(null);
+    setActiveTransect(null);
+    setIsTransectLoading(false);
+    setTransectError(null);
+  }, []);
+
+  const handleToggleCrossSectionModal = useCallback(() => {
+    setIsCrossSectionModalOpen((prev) => {
+      if (prev) {
+        if (transectAbortControllerRef.current) {
+          transectAbortControllerRef.current.abort();
+        }
+        transectRequestIdRef.current++;
+        setTransectData(null);
+        setActiveTransect(null);
+        setIsTransectLoading(false);
+        setTransectError(null);
+        return false;
+      }
+      return true;
+    });
+  }, []);
+
+  // Invalidate and clear transect results and 3D curtain on global time, variable, viewMode, or dataset change
+  useEffect(() => {
+    if (transectAbortControllerRef.current) {
+      transectAbortControllerRef.current.abort();
+    }
+    transectRequestIdRef.current++;
+    setTransectData(null);
+    setActiveTransect(null);
+    setIsTransectLoading(false);
+    setTransectError(null);
+  }, [timeIndex, selectedVariable, viewMode, activeDataset?.dataset_id]);
 
   // Close Inspector Drawer
   const _handleCloseDrawer = useCallback(() => {
@@ -1056,9 +1260,9 @@ export default function App() {
         onViewModeChange={setViewMode}
         onApplyPreset={handleApplyPreset}
         onOpenObservationDrawer={() => {
+          // Only toggle the drawer. Argo and glider marker visibility
+          // are independent switches the user controls separately.
           setIsObservationDrawerOpen((prev) => !prev);
-          setShowArgo(true);
-          setShowGliders(true);
         }}
         onOpenComparison={() => setIsComparisonOpen(true)}
         activeDataset={activeDataset}
@@ -1162,15 +1366,26 @@ export default function App() {
           datasetTransitionError={datasetTransitionError}
           showCurrents={showCurrents}
           onToggleCurrents={setShowCurrents}
-          showObservations={showArgo || showGliders || isObservationDrawerOpen}
-          onToggleObservations={() => {
-            const next = !isObservationDrawerOpen;
-            setIsObservationDrawerOpen(next);
-            setShowArgo(true);
-            setShowGliders(true);
-          }}
+          showArgo={showArgo}
+          onToggleArgo={setShowArgo}
+          showGliders={showGliders}
+          onToggleGliders={setShowGliders}
+          showObservations={isObservationDrawerOpen}
+          onToggleObservations={() => setIsObservationDrawerOpen((prev) => !prev)}
           showAnomalies={showAnomalyField}
           onToggleAnomalies={() => setShowAnomalyField((prev) => !prev)}
+          showCrossSection={isCrossSectionModalOpen}
+          onToggleCrossSection={handleToggleCrossSectionModal}
+          anomalyVariable={anomalyVariable}
+          onChangeAnomalyVariable={handleChangeAnomalyVariable}
+          anomalyThreshold={activeAnomalyThreshold}
+          onChangeAnomalyThreshold={setAnomalyThreshold}
+          anomalyData={anomalyData}
+          isAnomalyLoading={isAnomalyLoading}
+          anomalyError={anomalyError}
+          onRetryAnomaly={() => setAnomalyRetryCount((c) => c + 1)}
+          insituSourceMode={insituSourceMode}
+          onSelectSourceMode={setInsituSourceMode}
         />
 
         {/* Floating Location Inspector (appears on ocean click) */}
@@ -1534,6 +1749,20 @@ export default function App() {
           timeIndex={timeIndex}
           isTransitioningDataset={isTransitioningDataset}
           isDatasetReady={isDatasetReady}
+        />
+        <CrossSectionModal
+          isOpen={isCrossSectionModalOpen}
+          onClose={handleCloseCrossSectionModal}
+          activeDataset={activeDataset}
+          selectedVariable={selectedVariable}
+          availableVariables={availableVariables}
+          timeIndex={timeIndex}
+          currentTimeTimestamp={currentTimeTimestamp}
+          transectData={transectData}
+          isLoading={isTransectLoading}
+          error={transectError}
+          onRequestTransect={handleRequestTransect}
+          onClearTransect={handleClearTransect}
         />
       </main>
     </div>

@@ -275,6 +275,7 @@ export async function fetchOceanRegion({
   return requestJson(`${API_BASE}/ocean/region?${params.toString()}`, { signal, cacheKey });
 }
 
+
 /**
  * Retrieves 3D spatial volume data for volumetric ocean block visualization.
  * Returns downsampled 3D grid coordinates, scalar values (and current components),
@@ -619,6 +620,7 @@ export async function fetchAnomalyField({
   threshold = null,
   depth_min = 0,
   depth_max = 4000,
+  source_mode = null,
   signal = null
 } = {}) {
   const params = new URLSearchParams();
@@ -626,6 +628,7 @@ export async function fetchAnomalyField({
   if (threshold !== null && threshold !== undefined) params.set('threshold', threshold);
   if (depth_min !== undefined) params.set('depth_min', depth_min);
   if (depth_max !== undefined) params.set('depth_max', depth_max);
+  if (source_mode) params.set('source_mode', source_mode);
 
   const url = `${API_BASE}/anomaly/field?${params.toString()}`;
   const res = await fetch(url, { signal });
@@ -638,8 +641,11 @@ export async function fetchAnomalyField({
 /**
  * Retrieves cross-variable anomaly summary and coverage metadata.
  */
-export async function fetchAnomalySummary(signal = null) {
-  const url = `${API_BASE}/anomaly/summary`;
+export async function fetchAnomalySummary({ source_mode = null, signal = null } = {}) {
+  const params = new URLSearchParams();
+  if (source_mode) params.set('source_mode', source_mode);
+  const qs = params.toString();
+  const url = `${API_BASE}/anomaly/summary${qs ? `?${qs}` : ''}`;
   const res = await fetch(url, { signal });
   if (!res.ok) {
     throw new Error(`Failed to fetch anomaly summary: HTTP ${res.status}`);

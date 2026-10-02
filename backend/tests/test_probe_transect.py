@@ -55,10 +55,18 @@ class TestProbeTransect(unittest.TestCase):
         self.assertIn("domain bounds", r.json()["detail"].lower())
 
     def test_ocean_transect_valid(self):
-        """Tests ODV vertical cross-section interpolation across 100 points."""
+        """Tests ODV vertical cross-section interpolation across 100 points with direct value comparison."""
         r = client.get("/api/ocean/transect?lat1=10.0&lon1=80.0&lat2=18.0&lon2=90.0&variable=temperature&time_idx=0")
         self.assertEqual(r.status_code, 200)
         data = r.json()
+        self.assertEqual(data["dataset_id"], "incois_roms_synthetic")
+        self.assertEqual(data["variable"], "temperature")
+        self.assertEqual(data["units"], "degC")
+        self.assertEqual(data["time_idx"], 0)
+        self.assertAlmostEqual(data["lat1"], 10.0, places=3)
+        self.assertAlmostEqual(data["lon1"], 80.0, places=3)
+        self.assertAlmostEqual(data["lat2"], 18.0, places=3)
+        self.assertAlmostEqual(data["lon2"], 90.0, places=3)
         self.assertEqual(data["num_points"], 100)
         self.assertEqual(len(data["depth_levels"]), 9)
         self.assertEqual(len(data["matrix"]), 9)
@@ -69,6 +77,23 @@ class TestProbeTransect(unittest.TestCase):
         self.assertEqual(len(data["mld_profile"]), 100)
         self.assertEqual(len(data["d20_profile"]), 100)
         self.assertEqual(len(data["tchp_profile"]), 100)
+
+        # Directly compare start point against a direct probe at (10.0, 80.0)
+        r_probe_start = client.get("/api/ocean/probe?lat=10.0&lon=80.0&time_idx=0")
+        self.assertEqual(r_probe_start.status_code, 200)
+        probe_start = r_probe_start.json()
+        for k in range(len(data["depth_levels"])):
+            t_transect = data["matrix"][k][0]
+            t_probe = probe_start["temperature"][k]
+            if t_transect is not None and t_probe is not None:
+                self.assertAlmostEqual(t_transect, t_probe, delta=0.05)
+
+        # Verify physical ocean stratification: surface is warmer than deep abyss
+        surface_t = [v for v in data["matrix"][0] if v is not None]
+        abyss_t = [v for v in data["matrix"][-1] if v is not None]
+        self.assertTrue(len(surface_t) > 0)
+        self.assertTrue(len(abyss_t) > 0)
+        self.assertGreater(sum(surface_t) / len(surface_t), sum(abyss_t) / len(abyss_t))
 
     def test_ocean_transect_currents(self):
         """Tests currents vector magnitude cross-section."""

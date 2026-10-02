@@ -113,6 +113,7 @@ class OceanTransectResponse(BaseModel):
     mld_profile: Optional[List[Optional[float]]] = None
     d20_profile: Optional[List[Optional[float]]] = None
     tchp_profile: Optional[List[Optional[float]]] = None
+    dataset_id: str = Field(..., description="Active dataset identifier")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

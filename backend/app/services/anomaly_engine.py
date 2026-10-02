@@ -59,8 +59,8 @@ class AnomalyEngine:
     Aggregates all available in-situ collocations into a sparse 3D residual field.
     """
     def __init__(self):
-        self._field_cache: Dict[Tuple[str, Optional[float], float, float, str], AnomalyFieldResponse] = {}
-        self._summary_cache: Dict[str, AnomalySummaryResponse] = {}
+        self._field_cache: Dict[Tuple[str, Optional[float], float, float, str, str], AnomalyFieldResponse] = {}
+        self._summary_cache: Dict[Tuple[str, str], AnomalySummaryResponse] = {}
 
     def compute_field(
         self,
@@ -68,6 +68,7 @@ class AnomalyEngine:
         threshold: Optional[float] = None,
         depth_min: float = 0.0,
         depth_max: float = 4000.0,
+        source_mode: str = "ALL",
     ) -> AnomalyFieldResponse:
         """
         Builds a sparse anomaly field for the requested variable.
@@ -78,7 +79,7 @@ class AnomalyEngine:
         if threshold is None:
             threshold = DEFAULT_TEMP_THRESHOLD if variable == "temperature" else DEFAULT_SAL_THRESHOLD
 
-        cache_key = (variable, threshold, depth_min, depth_max, str(collocation_engine.ocean_svc.active_dataset_id))
+        cache_key = (variable, threshold, depth_min, depth_max, str(collocation_engine.ocean_svc.active_dataset_id), source_mode)
         if cache_key in self._field_cache:
             cached_resp = self._field_cache[cache_key]
             return cached_resp.model_copy(update={"latency_ms": round((time.perf_counter() - t_start) * 1000.0, 2)})
@@ -88,7 +89,7 @@ class AnomalyEngine:
         platform_ids_seen = set()
 
         # ── Argo Profiles ────────────────────────────────────────────────────
-        all_profiles = insitu_service.get_all_profiles(source_mode="ALL")
+        all_profiles = insitu_service.get_all_profiles(source_mode=source_mode)
         for profile in all_profiles:
             pid = profile["id"]
             collocation = collocation_engine.collocate_profile(pid)
@@ -124,7 +125,7 @@ class AnomalyEngine:
                 ))
 
         # ── Glider Transects ─────────────────────────────────────────────────
-        all_gliders = insitu_service.get_glider_transects(source_mode="ALL")
+        all_gliders = insitu_service.get_glider_transects(source_mode=source_mode)
         for glider in all_gliders:
             gid = glider["id"]
             collocation = collocation_engine.collocate_glider(gid)
@@ -190,18 +191,22 @@ class AnomalyEngine:
             ))
 
         latency = (time.perf_counter() - t_start) * 1000.0
+        contributing_platform_ids = set(p.platform_id for p in points)
 
+        active_ds = str(collocation_engine.ocean_svc.active_dataset_id)
         resp = AnomalyFieldResponse(
             variable=variable,
             unit=unit,
             threshold=threshold,
             depth_min=depth_min,
             depth_max=depth_max,
+            dataset_id=active_ds,
+            source_mode=source_mode,
             points=points,
             coverage_bins=coverage_bins,
             alert_count=alert_count,
             total_valid_pairs=len(points),
-            platform_count=len(platform_ids_seen),
+            platform_count=len(contributing_platform_ids),
             bias=bias,
             mae=mae,
             rmse=rmse,
@@ -211,14 +216,14 @@ class AnomalyEngine:
         self._field_cache[cache_key] = resp
         return resp
 
-    def compute_summary(self) -> AnomalySummaryResponse:
+    def compute_summary(self, source_mode: str = "ALL") -> AnomalySummaryResponse:
         """Returns cross-variable summary for both Temperature and Salinity."""
-        cache_key = str(collocation_engine.ocean_svc.active_dataset_id)
+        cache_key = (str(collocation_engine.ocean_svc.active_dataset_id), source_mode)
         if cache_key in self._summary_cache:
             return self._summary_cache[cache_key]
 
-        temp_field = self.compute_field("temperature", DEFAULT_TEMP_THRESHOLD)
-        sal_field = self.compute_field("salinity", DEFAULT_SAL_THRESHOLD)
+        temp_field = self.compute_field("temperature", DEFAULT_TEMP_THRESHOLD, source_mode=source_mode)
+        sal_field = self.compute_field("salinity", DEFAULT_SAL_THRESHOLD, source_mode=source_mode)
         platform_ids = set(p.platform_id for p in temp_field.points) | set(p.platform_id for p in sal_field.points)
         now = datetime.now(tz=timezone.utc).isoformat()
         res = AnomalySummaryResponse(

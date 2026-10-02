@@ -451,7 +451,7 @@ export default function OceanCanvas({
   // 2. Particle Streamlines Lifecycle Effect (Vector Velocity Flow)
   useEffect(() => {
     const scene = sceneRef.current;
-    const isCurrentsActive = (showCurrents || selectedVariable === 'currents') && !isDatasetBlocked;
+    const isCurrentsActive = showCurrents && !isDatasetBlocked;
     if (!scene || !isCurrentsActive) {
       if (particleSystemRef.current) {
         particleSystemRef.current.dispose();

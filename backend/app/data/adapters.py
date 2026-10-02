@@ -345,6 +345,7 @@ class SyntheticRomsAdapter(BaseOceanAdapter):
     def __init__(self, nc_path: Path = settings.SYNTHETIC_NETCDF_PATH, argo_path: Path = settings.ARGO_PATH):
         self.nc_path = nc_path
         self.argo_path = argo_path
+        self.dataset_id = "incois_roms_synthetic"
         self.dataset: Optional[nc.Dataset] = None
         self.times: np.ndarray = np.array([])
         self.time_timestamps: List[str] = []
@@ -781,7 +782,8 @@ class SyntheticRomsAdapter(BaseOceanAdapter):
             max_val=max_val,
             mld_profile=mld_profile,
             d20_profile=d20_profile,
-            tchp_profile=tchp_profile
+            tchp_profile=tchp_profile,
+            dataset_id=self.dataset_id
         )
 
     def get_availability(self, lat: float, lon: float) -> LocationAvailabilityResponse:
@@ -1145,6 +1147,7 @@ class GlorysLocalAdapter(BaseOceanAdapter):
             self.nc_path = Path(desc.local_path) if desc and desc.local_path else Path(settings.RAW_DATA_DIR) / "cmems_mod_glo_phy_my_0.083deg_P1D-m_thetao-so-uo-vo_50.00E-100.00E_0.00N-25.00N_0.49-92.33m_2025-01-01-2025-01-07.nc"
         else:
             self.nc_path = nc_path
+        self.dataset_id = "cmems_mod_glo_phy_my_0.083deg_P1D-m"
 
         self.dataset: Optional[nc.Dataset] = None
         self.times: np.ndarray = np.array([])
@@ -1635,7 +1638,8 @@ class GlorysLocalAdapter(BaseOceanAdapter):
             max_val=max_val,
             mld_profile=mld_profile,
             d20_profile=d20_profile,
-            tchp_profile=tchp_profile
+            tchp_profile=tchp_profile,
+            dataset_id=self.dataset_id
         )
 
     def get_availability(self, lat: float, lon: float) -> LocationAvailabilityResponse:

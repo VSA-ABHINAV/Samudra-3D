@@ -581,14 +581,14 @@ test.describe('Core Phase 02: Scientific Readiness Lifecycle and Identity Verifi
     await expect(page.getByTestId('current-time-badge')).toContainText('2025-01-10');
 
     // Switch back to Dataset A
-    const activateButtons = page.getByRole('button', { name: 'Activate Dataset' });
-    if (await activateButtons.count() > 0) {
-      await activateButtons.first().click();
-      await expect(page.getByTestId('current-time-badge')).toContainText('2025-01-01');
-    }
+    const activateBtnA = page.getByRole('button', { name: 'Activate Dataset' }).first();
+    await expect(activateBtnA).toBeVisible({ timeout: 10000 });
+    await expect(activateBtnA).toBeEnabled();
+    await activateBtnA.click();
+    await expect(page.getByTestId('current-time-badge')).toContainText('2025-01-01');
 
     // Verify backend mutations occurred in strict sequential order
-    expect(backendSelectionLog).toEqual([DATASET_B.dataset_id, DATASET_A.dataset_id]);
+    await expect.poll(() => backendSelectionLog).toEqual([DATASET_B.dataset_id, DATASET_A.dataset_id]);
   });
 
 });

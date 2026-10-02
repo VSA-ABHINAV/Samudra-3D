@@ -148,5 +148,87 @@ class TestAnomalyEngine(unittest.TestCase):
         self.assertLess(dt_ms, 500.0)
         print(f"[OK] Anomaly field endpoint latency: {dt_ms:.2f}ms (< 500ms target)")
 
+    def test_09_source_mode_isolation_and_filtering(self):
+        """Test REAL_LOCAL, SYNTHETIC, and ALL source modes return distinct platform sets and counts."""
+        # 1. REAL_LOCAL
+        res_real = self.client.get("/api/anomaly/field?variable=temperature&source_mode=REAL_LOCAL")
+        self.assertEqual(res_real.status_code, 200)
+        data_real = res_real.json()
+        self.assertEqual(data_real["source_mode"], "REAL_LOCAL")
+        real_pids = set(p["platform_id"] for p in data_real["points"])
+        # Ensure no synthetic platforms in real mode
+        for pid in real_pids:
+            self.assertFalse(pid.startswith("SYN_"), f"Synthetic ID {pid} found in REAL_LOCAL anomaly field")
+
+        # 2. SYNTHETIC
+        res_syn = self.client.get("/api/anomaly/field?variable=temperature&source_mode=SYNTHETIC")
+        self.assertEqual(res_syn.status_code, 200)
+        data_syn = res_syn.json()
+        self.assertEqual(data_syn["source_mode"], "SYNTHETIC")
+        syn_pids = set(p["platform_id"] for p in data_syn["points"])
+
+        # 3. ALL
+        res_all = self.client.get("/api/anomaly/field?variable=temperature&source_mode=ALL")
+        self.assertEqual(res_all.status_code, 200)
+        data_all = res_all.json()
+        self.assertEqual(data_all["source_mode"], "ALL")
+        all_pids = set(p["platform_id"] for p in data_all["points"])
+
+        # Platform count assertions
+        self.assertGreater(data_real["platform_count"], 0)
+        self.assertGreater(data_syn["platform_count"], 0)
+        self.assertEqual(data_real["platform_count"], len(real_pids))
+        self.assertEqual(data_syn["platform_count"], len(syn_pids))
+        self.assertEqual(data_all["platform_count"], len(all_pids))
+        self.assertEqual(all_pids, real_pids | syn_pids)
+        self.assertEqual(data_all["total_valid_pairs"], data_real["total_valid_pairs"] + data_syn["total_valid_pairs"])
+
+    def test_10_invalid_source_mode(self):
+        """Invalid source_mode returns 400 Bad Request."""
+        res = self.client.get("/api/anomaly/field?variable=temperature&source_mode=INVALID_MODE")
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("Invalid source_mode", res.json()["detail"])
+
+        res_sum = self.client.get("/api/anomaly/summary?source_mode=INVALID_MODE")
+        self.assertEqual(res_sum.status_code, 400)
+        self.assertIn("Invalid source_mode", res_sum.json()["detail"])
+
+    def test_11_zero_valid_platform_count(self):
+        """When 0 points survive depth filters, platform_count is 0 and aggregate metrics are None."""
+        # Query impossible depth range (e.g. 3990 to 4000 where no observations exist)
+        res = self.client.get("/api/anomaly/field?variable=temperature&depth_min=3990&depth_max=4000")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["total_valid_pairs"], 0)
+        self.assertEqual(data["platform_count"], 0)
+        self.assertEqual(data["alert_count"], 0)
+        self.assertIsNone(data["bias"])
+        self.assertIsNone(data["mae"])
+        self.assertIsNone(data["rmse"])
+
+    def test_12_summary_source_mode_partitioning(self):
+        """Verify summary endpoint partitions results by source_mode."""
+        res_real = self.client.get("/api/anomaly/summary?source_mode=REAL_LOCAL")
+        self.assertEqual(res_real.status_code, 200)
+        data_real = res_real.json()
+        self.assertEqual(data_real["temperature"]["source_mode"], "REAL_LOCAL")
+
+        res_syn = self.client.get("/api/anomaly/summary?source_mode=SYNTHETIC")
+        self.assertEqual(res_syn.status_code, 200)
+        data_syn = res_syn.json()
+        self.assertEqual(data_syn["temperature"]["source_mode"], "SYNTHETIC")
+
+        self.assertNotEqual(data_real["platform_count"], data_syn["platform_count"])
+
+    def test_13_dataset_id_provenance(self):
+        """Verify anomaly field response includes dataset_id matching active dataset."""
+        res = self.client.get("/api/anomaly/field?variable=temperature")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("dataset_id", data)
+        self.assertIsNotNone(data["dataset_id"])
+        self.assertEqual(data["dataset_id"], "incois_roms_synthetic")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -16,10 +16,11 @@ def get_anomaly_field(
     variable: str = Query("temperature", description="Variable: 'temperature' or 'salinity'"),
     threshold: Optional[float] = Query(None, description="Alert threshold (|delta| >= threshold)"),
     depth_min: float = Query(0.0, ge=0.0, description="Minimum depth in metres"),
-    depth_max: float = Query(4000.0, le=4000.0, description="Maximum depth in metres")
+    depth_max: float = Query(4000.0, le=4000.0, description="Maximum depth in metres"),
+    source_mode: Optional[str] = Query(None, description="Observation source mode: 'REAL_LOCAL', 'SYNTHETIC', or 'ALL'")
 ):
     """
-    Retrieves the sparse 3D residual field aggregated from all available in-situ platforms (Argo and Gliders).
+    Retrieves the sparse 3D residual field aggregated from available in-situ platforms (Argo and Gliders).
     Only valid, QC-passed observations are included. No spatial extrapolation beyond source support radius.
     """
     if variable not in ("temperature", "salinity"):
@@ -32,17 +33,32 @@ def get_anomaly_field(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"depth_min ({depth_min}m) cannot be greater than depth_max ({depth_max}m)."
         )
+    if source_mode is not None and source_mode not in ("REAL_LOCAL", "SYNTHETIC", "ALL"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid source_mode '{source_mode}'. Must be 'REAL_LOCAL', 'SYNTHETIC', or 'ALL'."
+        )
 
+    mode = source_mode or "ALL"
     return anomaly_engine.compute_field(
         variable=variable,
         threshold=threshold,
         depth_min=depth_min,
-        depth_max=depth_max
+        depth_max=depth_max,
+        source_mode=mode
     )
 
 @router.get("/summary", response_model=AnomalySummaryResponse, summary="Retrieve cross-variable anomaly summary")
-def get_anomaly_summary():
+def get_anomaly_summary(
+    source_mode: Optional[str] = Query(None, description="Observation source mode: 'REAL_LOCAL', 'SYNTHETIC', or 'ALL'")
+):
     """
     Returns aggregate validation metrics, observation coverage, platform counts, and threshold alerts for both variables.
     """
-    return anomaly_engine.compute_summary()
+    if source_mode is not None and source_mode not in ("REAL_LOCAL", "SYNTHETIC", "ALL"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid source_mode '{source_mode}'. Must be 'REAL_LOCAL', 'SYNTHETIC', or 'ALL'."
+        )
+    mode = source_mode or "ALL"
+    return anomaly_engine.compute_summary(source_mode=mode)
