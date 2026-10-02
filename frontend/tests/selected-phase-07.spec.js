@@ -337,19 +337,89 @@ test.describe('Selected Phase 07: User-Chosen Ocean Cross-Section Workflow', () 
     await page.screenshot({ path: path.join(evidenceDir, 'TC-P07-05-provenance-rejections.png') });
   });
 
+function computeExpectedPhysicalLayout(depthLevels, { plotTop = 10, plotHeight = 220 } = {}) {
+  const K = depthLevels.length;
+  if (K === 0) return [];
+  if (K === 1) {
+    return [{
+      depth: depthLevels[0],
+      yTop: plotTop,
+      height: plotHeight,
+      yBottom: plotTop + plotHeight,
+      yCenter: plotTop + plotHeight / 2,
+      yDepthCoord: plotTop + plotHeight / 2
+    }];
+  }
+
+  const isAscending = depthLevels[1] > depthLevels[0];
+  if (isAscending) {
+    const zSurface = depthLevels[0] - (depthLevels[1] - depthLevels[0]) / 2;
+    const zDeep = depthLevels[K - 1] + (depthLevels[K - 1] - depthLevels[K - 2]) / 2;
+    const deltaZ = zDeep - zSurface || 1.0;
+
+    return depthLevels.map((d, k) => {
+      const zTop = k === 0 ? zSurface : (depthLevels[k - 1] + d) / 2;
+      const zBottom = k === K - 1 ? zDeep : (d + depthLevels[k + 1]) / 2;
+      const yTop = plotTop + ((zTop - zSurface) / deltaZ) * plotHeight;
+      const yBottom = plotTop + ((zBottom - zSurface) / deltaZ) * plotHeight;
+      const yCenter = (yTop + yBottom) / 2;
+      const yDepthCoord = plotTop + ((d - zSurface) / deltaZ) * plotHeight;
+      return {
+        depth: d,
+        yTop,
+        height: yBottom - yTop,
+        yBottom,
+        yCenter,
+        yDepthCoord
+      };
+    });
+  } else {
+    const zSurface = depthLevels[K - 1] - (depthLevels[K - 2] - depthLevels[K - 1]) / 2;
+    const zDeep = depthLevels[0] + (depthLevels[0] - depthLevels[1]) / 2;
+    const deltaZ = zDeep - zSurface || 1.0;
+
+    return depthLevels.map((d, k) => {
+      const zTop = k === K - 1 ? zSurface : (d + depthLevels[k + 1]) / 2;
+      const zBottom = k === 0 ? zDeep : (depthLevels[k - 1] + d) / 2;
+      const yTop = plotTop + ((zTop - zSurface) / deltaZ) * plotHeight;
+      const yBottom = plotTop + ((zBottom - zSurface) / deltaZ) * plotHeight;
+      const yCenter = (yTop + yBottom) / 2;
+      const yDepthCoord = plotTop + ((d - zSurface) / deltaZ) * plotHeight;
+      return {
+        depth: d,
+        yTop,
+        height: yBottom - yTop,
+        yBottom,
+        yCenter,
+        yDepthCoord
+      };
+    });
+  }
+}
+
   test('TC-P07-06: Close modal while request is held aborts request and late response cannot appear on reopen', async ({ page }) => {
-    let heldResolve = null;
+    let releaseHeldRoute = null;
+    let onRequestReceived = null;
+    let routeSettledPromise = null;
 
     await setupStandardRoutes(page);
     await page.route('**/api/ocean/transect*', async (route) => {
-      await new Promise((resolve) => {
-        heldResolve = resolve;
+      routeSettledPromise = new Promise((resolveRoute) => {
+        if (onRequestReceived) onRequestReceived();
+        new Promise((res) => { releaseHeldRoute = res; }).then(async () => {
+          try {
+            await route.fulfill({
+              status: 200,
+              contentType: 'application/json',
+              body: JSON.stringify(MOCK_TRANSECT_TEMP)
+            });
+          } catch {
+            // Client aborted before fulfill completed
+          }
+          resolveRoute();
+        });
       });
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify(MOCK_TRANSECT_TEMP)
-      });
+      await routeSettledPromise;
     });
 
     await page.goto('/');
@@ -358,17 +428,19 @@ test.describe('Selected Phase 07: User-Chosen Ocean Cross-Section Workflow', () 
     const transectBtn = page.locator('[data-testid="bottombar-transect-btn"]');
     await transectBtn.click();
 
-    // Submit request (it will be held)
+    // Submit request (held)
+    const requestPromise = new Promise((res) => { onRequestReceived = res; });
     await page.locator('[data-testid="transect-submit-btn"]').click();
+    await requestPromise;
     await expect(page.locator('[data-testid="transect-loading-indicator"]')).toBeVisible();
 
     // Close modal while request is pending
     await page.locator('[data-testid="transect-close-btn"]').click();
     await expect(page.locator('[data-testid="cross-section-modal"]')).not.toBeVisible();
 
-    // Release late response
-    if (heldResolve) heldResolve();
-    await page.waitForTimeout(400);
+    // Release late response and await settlement deterministically
+    if (releaseHeldRoute) releaseHeldRoute();
+    if (routeSettledPromise) await routeSettledPromise;
 
     // Reopen modal: old late response must NOT be displayed
     await transectBtn.click();
@@ -401,7 +473,7 @@ test.describe('Selected Phase 07: User-Chosen Ocean Cross-Section Workflow', () 
     await page.screenshot({ path: path.join(evidenceDir, 'TC-P07-07-input-edit-clears-result.png') });
   });
 
-  test('TC-P07-08: Rendered SVG geometry verifies proportional depth spacing, boundary limits, and no-data inspection', async ({ page }) => {
+  test('TC-P07-08: Rendered SVG geometry verifies exact proportional depth coordinates, boundary limits, and no-data inspection', async ({ page }) => {
     await setupStandardRoutes(page);
     await page.goto('/');
     await waitForDatasetReady(page);
@@ -411,51 +483,42 @@ test.describe('Selected Phase 07: User-Chosen Ocean Cross-Section Workflow', () 
 
     await expect(page.locator('[data-testid="transect-results-container"]')).toBeVisible({ timeout: 5000 });
 
-    // 1. Inspect rendered cell geometry for ascending uneven depths [0, 10, 50, 100, 200, 500]
-    const cellRow0 = page.locator('[data-testid="cell-valid-0-0"]');
-    const cellRow1 = page.locator('[data-testid="cell-valid-1-0"]');
-    const cellRow2 = page.locator('[data-testid="cell-valid-2-0"]');
-    const cellRow3 = page.locator('[data-testid="cell-valid-3-0"]');
-    const cellRow4 = page.locator('[data-testid="cell-valid-4-0"]');
-    const cellRow5 = page.locator('[data-testid="cell-valid-5-0"]');
+    // 1. Independently compute expected physical layout for ascending depths [0, 10, 50, 100, 200, 500]
+    const depths = MOCK_TRANSECT_TEMP.depth_levels;
+    const expectedLayout = computeExpectedPhysicalLayout(depths);
 
-    await expect(cellRow0).toBeVisible();
-    await expect(cellRow5).toBeVisible();
+    const actualRows = [];
+    for (let k = 0; k < depths.length; k++) {
+      const cell = page.locator(`[data-depth-idx="${k}"][data-point-idx="0"]`);
+      await expect(cell).toBeVisible();
 
-    const y0 = parseFloat(await cellRow0.getAttribute('y') || '0');
-    const h0 = parseFloat(await cellRow0.getAttribute('height') || '0');
-    const y1 = parseFloat(await cellRow1.getAttribute('y') || '0');
-    const h1 = parseFloat(await cellRow1.getAttribute('height') || '0');
-    const y2 = parseFloat(await cellRow2.getAttribute('y') || '0');
-    const h2 = parseFloat(await cellRow2.getAttribute('height') || '0');
-    const y3 = parseFloat(await cellRow3.getAttribute('y') || '0');
-    const h3 = parseFloat(await cellRow3.getAttribute('height') || '0');
-    const y4 = parseFloat(await cellRow4.getAttribute('y') || '0');
-    const h4 = parseFloat(await cellRow4.getAttribute('height') || '0');
-    const y5 = parseFloat(await cellRow5.getAttribute('y') || '0');
-    const h5 = parseFloat(await cellRow5.getAttribute('height') || '0');
+      const y = parseFloat(await cell.getAttribute('y') || '0');
+      const h = parseFloat(await cell.getAttribute('height') || '0');
+      const center = y + h / 2;
 
-    // Calculate cell centers
-    const c0 = y0 + h0 / 2;
-    const c1 = y1 + h1 / 2;
-    const c2 = y2 + h2 / 2;
-    const c3 = y3 + h3 / 2;
-    const c4 = y4 + h4 / 2;
-    const c5 = y5 + h5 / 2;
+      actualRows.push({ y, h, center, depth: depths[k] });
 
-    // Strict vertical ordering of cell centers
-    expect(c0).toBeLessThan(c1);
-    expect(c1).toBeLessThan(c2);
-    expect(c2).toBeLessThan(c3);
-    expect(c3).toBeLessThan(c4);
-    expect(c4).toBeLessThan(c5);
+      const exp = expectedLayout[k];
+      // Assert exact numerical match (within 0.02 SVG coordinate units) against independently calculated physics
+      expect(Math.abs(y - exp.yTop)).toBeLessThan(0.02);
+      expect(Math.abs(h - exp.height)).toBeLessThan(0.02);
+      expect(Math.abs(center - exp.yCenter)).toBeLessThan(0.02);
 
-    // Deepest cell (row 5: ~300m thick interval) must be significantly taller than surface cell (row 0: ~10m thick interval)
-    expect(h5).toBeGreaterThan(h0 * 10);
+      // Boundary containment
+      expect(y).toBeGreaterThanOrEqual(10.0 - 1e-4);
+      expect(y + h).toBeLessThanOrEqual(230.0 + 1e-4);
 
-    // Strict plot area boundary containment: plotTop=10, plotHeight=220, so [10, 230]
-    expect(y0).toBeGreaterThanOrEqual(10.0);
-    expect(y5 + h5).toBeLessThanOrEqual(230.01);
+      // Assert Y-axis depth label aligns with physical depth coordinate position
+      const depthLabel = page.locator(`[data-testid="transect-depth-label-${k}"]`);
+      await expect(depthLabel).toBeVisible();
+      const labelY = parseFloat(await depthLabel.getAttribute('y') || '0');
+      expect(Math.abs(labelY - (exp.yDepthCoord + 3.5))).toBeLessThan(0.02);
+    }
+
+    // Verify adjacent layers touch perfectly without overlap: bottom of layer k == top of layer k+1
+    for (let k = 0; k < depths.length - 1; k++) {
+      expect(Math.abs((actualRows[k].y + actualRows[k].h) - actualRows[k + 1].y)).toBeLessThan(0.02);
+    }
 
     // 2. Verify no-data legend and tooltips
     const legend = page.locator('[data-testid="transect-no-data-legend"]');
@@ -472,6 +535,7 @@ test.describe('Selected Phase 07: User-Chosen Ocean Cross-Section Workflow', () 
     await expect(hoverSounding).toContainText('No Data (Land / Masked)');
 
     // Hover valid cell at depth 0, point 0
+    const cellRow0 = page.locator('[data-testid="cell-valid-0-0"]');
     await cellRow0.hover();
     await expect(hoverSounding).toContainText('28.50 °C');
     await expect(hoverSounding).toContainText('Depth: 0 m');
@@ -479,8 +543,8 @@ test.describe('Selected Phase 07: User-Chosen Ocean Cross-Section Workflow', () 
     await page.screenshot({ path: path.join(evidenceDir, 'TC-P07-08-nodata-and-depth-inspection.png') });
   });
 
-  test('TC-P07-09: Descending depth arrays correctly orient surface at top and reject non-monotonic coordinates', async ({ page }) => {
-    // 1. Descending depth payload: depths 500 down to 0
+  test('TC-P07-09: Descending and closely-spaced depth arrays match exact physical scaling, no overlap, and reject non-monotonic coordinates', async ({ page }) => {
+    // Part A: Descending depth payload: depths 500 down to 0
     const DESCENDING_TRANSECT = {
       ...MOCK_TRANSECT_TEMP,
       depth_levels: [500.0, 200.0, 100.0, 50.0, 10.0, 0.0],
@@ -513,43 +577,89 @@ test.describe('Selected Phase 07: User-Chosen Ocean Cross-Section Workflow', () 
 
     await expect(page.locator('[data-testid="transect-results-container"]')).toBeVisible({ timeout: 5000 });
 
-    // In descending ordering:
-    // row 5 is depth 0m (shallow/surface), so it must be mapped near the top of the plot (y ~ 10)
-    // row 0 is depth 500m (deep/abyss), so it must be mapped near the bottom of the plot (y + height ~ 230)
-    const cellRow0 = page.locator('[data-testid="cell-valid-0-0"]'); // 500m deep
-    const cellRow5 = page.locator('[data-testid="cell-valid-5-0"]'); // 0m surface
+    const descDepths = DESCENDING_TRANSECT.depth_levels;
+    const expDescLayout = computeExpectedPhysicalLayout(descDepths);
 
-    await expect(cellRow0).toBeVisible();
-    await expect(cellRow5).toBeVisible();
+    const actualDescRows = [];
+    for (let k = 0; k < descDepths.length; k++) {
+      const cell = page.locator(`[data-depth-idx="${k}"][data-point-idx="0"]`);
+      await expect(cell).toBeVisible();
 
-    const y0 = parseFloat(await cellRow0.getAttribute('y') || '0');
-    const h0 = parseFloat(await cellRow0.getAttribute('height') || '0');
-    const y5 = parseFloat(await cellRow5.getAttribute('y') || '0');
-    const h5 = parseFloat(await cellRow5.getAttribute('height') || '0');
+      const y = parseFloat(await cell.getAttribute('y') || '0');
+      const h = parseFloat(await cell.getAttribute('height') || '0');
+      const center = y + h / 2;
 
-    // Surface row (row 5, depth 0m) must be at the top
-    expect(y5).toBeGreaterThanOrEqual(10.0);
-    expect(y5).toBeLessThan(y0);
+      actualDescRows.push({ y, h, center, depth: descDepths[k], k });
 
-    // Abyss row (row 0, depth 500m) must extend to the bottom
-    expect(y0 + h0).toBeLessThanOrEqual(230.01);
-    expect(y0 + h0).toBeGreaterThan(y5 + h5);
+      const exp = expDescLayout[k];
+      expect(Math.abs(y - exp.yTop)).toBeLessThan(0.02);
+      expect(Math.abs(h - exp.height)).toBeLessThan(0.02);
+      expect(Math.abs(center - exp.yCenter)).toBeLessThan(0.02);
 
-    // Deep row 0 (~300m thick interval) must be taller than surface row 5 (~10m thick interval)
-    expect(h0).toBeGreaterThan(h5 * 10);
+      expect(y).toBeGreaterThanOrEqual(10.0 - 1e-4);
+      expect(y + h).toBeLessThanOrEqual(230.0 + 1e-4);
+    }
+
+    // In descending ordering, row 5 (0m) is surface at top, row 0 (500m) is abyss at bottom
+    expect(actualDescRows[5].y).toBeLessThan(actualDescRows[0].y);
+    expect(Math.abs(actualDescRows[5].y - 10.0)).toBeLessThan(0.02);
+    expect(Math.abs((actualDescRows[0].y + actualDescRows[0].h) - 230.0)).toBeLessThan(0.02);
+
+    // Verify non-overlapping contiguity along vertical axis for descending order
+    const sortedDescByY = [...actualDescRows].sort((a, b) => a.y - b.y);
+    for (let i = 0; i < sortedDescByY.length - 1; i++) {
+      expect(Math.abs((sortedDescByY[i].y + sortedDescByY[i].h) - sortedDescByY[i + 1].y)).toBeLessThan(0.02);
+    }
 
     // Hover row 5: must report Depth: 0 m and temperature 28.50 °C
+    const cellRow5 = page.locator('[data-testid="cell-valid-5-0"]');
     await cellRow5.hover();
     const hoverSounding = page.locator('[data-testid="transect-hover-sounding"]');
     await expect(hoverSounding).toContainText('Depth: 0 m');
     await expect(hoverSounding).toContainText('28.50 °C');
 
     // Hover row 0: must report Depth: 500 m and temperature 6.50 °C
+    const cellRow0 = page.locator('[data-testid="cell-valid-0-0"]');
     await cellRow0.hover();
     await expect(hoverSounding).toContainText('Depth: 500 m');
     await expect(hoverSounding).toContainText('6.50 °C');
 
-    // 2. Non-monotonic depth array rejection: [0.0, 50.0, 20.0, 100.0]
+    // Part B: Valid closely-spaced depth levels (e.g. 0m, 1m, 2m, 50m, 100m, 500m)
+    const CLOSE_SPACED_TRANSECT = {
+      ...MOCK_TRANSECT_TEMP,
+      depth_levels: [0.0, 1.0, 2.0, 50.0, 100.0, 500.0],
+      matrix: [
+        [28.5, 28.6, 28.7, 28.8, 28.7, 28.6, 28.5, 28.4, 28.3, 28.2], // row 0: 0m
+        [28.4, 28.5, 28.6, 28.7, 28.6, 28.5, 28.4, 28.3, 28.2, 28.1], // row 1: 1m
+        [28.2, 28.3, 28.4, 28.5, 28.4, 28.3, 28.2, 28.1, 28.0, 27.9], // row 2: 2m
+        [24.5, 24.6, 24.7, 24.8, 24.7, 24.6, 24.5, 24.4, 24.3, 24.2], // row 3: 50m
+        [18.5, 18.6, 18.7, 18.8, 18.7, 18.6, 18.5, 18.4, 18.3, 18.2], // row 4: 100m
+        [6.5, 6.6, 6.7, 6.8, 6.7, 6.6, 6.5, 6.4, null, null]          // row 5: 500m
+      ]
+    };
+    activePayload = CLOSE_SPACED_TRANSECT;
+
+    await page.locator('[data-testid="transect-submit-btn"]').click();
+    await expect(page.locator('[data-testid="transect-results-container"]')).toBeVisible({ timeout: 5000 });
+
+    const closeDepths = CLOSE_SPACED_TRANSECT.depth_levels;
+    const expCloseLayout = computeExpectedPhysicalLayout(closeDepths);
+
+    for (let k = 0; k < closeDepths.length; k++) {
+      const cell = page.locator(`[data-depth-idx="${k}"][data-point-idx="0"]`);
+      const y = parseFloat(await cell.getAttribute('y') || '0');
+      const h = parseFloat(await cell.getAttribute('height') || '0');
+      const exp = expCloseLayout[k];
+
+      expect(Math.abs(y - exp.yTop)).toBeLessThan(0.02);
+      expect(Math.abs(h - exp.height)).toBeLessThan(0.02);
+      // Prove that fractional height is preserved (row 1 is ~0.338 units, NOT clamped to 1.0)
+      if (k === 1) {
+        expect(h).toBeLessThan(0.5);
+      }
+    }
+
+    // Part C: Non-monotonic depth array rejection: [0.0, 50.0, 20.0, 100.0]
     activePayload = {
       ...MOCK_TRANSECT_TEMP,
       depth_levels: [0.0, 50.0, 20.0, 100.0],
@@ -561,7 +671,6 @@ test.describe('Selected Phase 07: User-Chosen Ocean Cross-Section Workflow', () 
       ]
     };
 
-    // Retry computation with non-monotonic depths
     await page.locator('[data-testid="transect-submit-btn"]').click();
     const depthValError = page.locator('[data-testid="transect-depth-validation-error"]');
     await expect(depthValError).toBeVisible({ timeout: 5000 });
@@ -571,18 +680,28 @@ test.describe('Selected Phase 07: User-Chosen Ocean Cross-Section Workflow', () 
   });
 
   test('TC-P07-10: Invalidation when endpoint edit, variable change, timeline change, or view switch occurs while request is pending', async ({ page }) => {
-    let heldResolve = null;
+    let releaseHeldRoute = null;
+    let onRequestReceived = null;
+    let routeSettledPromise = null;
 
     await setupStandardRoutes(page);
     await page.route('**/api/ocean/transect*', async (route) => {
-      await new Promise((resolve) => {
-        heldResolve = resolve;
+      routeSettledPromise = new Promise((resolveRoute) => {
+        if (onRequestReceived) onRequestReceived();
+        new Promise((res) => { releaseHeldRoute = res; }).then(async () => {
+          try {
+            await route.fulfill({
+              status: 200,
+              contentType: 'application/json',
+              body: JSON.stringify(MOCK_TRANSECT_TEMP)
+            });
+          } catch {
+            // Client aborted before fulfill
+          }
+          resolveRoute();
+        });
       });
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify(MOCK_TRANSECT_TEMP)
-      });
+      await routeSettledPromise;
     });
 
     await page.goto('/');
@@ -596,43 +715,47 @@ test.describe('Selected Phase 07: User-Chosen Ocean Cross-Section Workflow', () 
     const resultsContainer = page.locator('[data-testid="transect-results-container"]');
 
     // --- Case A: Endpoint edit while request is pending ---
+    let reqPromise = new Promise((res) => { onRequestReceived = res; });
     await submitBtn.click();
+    await reqPromise;
     await expect(loadingIndicator).toBeVisible();
 
     // Edit lat1 input while request is in flight
     await page.locator('[data-testid="transect-lat1-input"]').fill('12.5');
     await expect(loadingIndicator).not.toBeVisible();
 
-    // Release held response
-    if (heldResolve) {
-      heldResolve();
-      heldResolve = null;
+    // Release held response and await settlement deterministically
+    if (releaseHeldRoute) {
+      releaseHeldRoute();
+      releaseHeldRoute = null;
     }
-    await page.waitForTimeout(300);
-
-    // Stale result must NOT be displayed
+    if (routeSettledPromise) await routeSettledPromise;
     await expect(resultsContainer).not.toBeVisible();
 
     // --- Case B: Variable change while request is pending ---
+    reqPromise = new Promise((res) => { onRequestReceived = res; });
     await submitBtn.click();
+    await reqPromise;
     await expect(loadingIndicator).toBeVisible();
 
     // Change variable select in modal
     await page.locator('[data-testid="transect-variable-select"]').selectOption('salinity');
     await expect(loadingIndicator).not.toBeVisible();
 
-    if (heldResolve) {
-      heldResolve();
-      heldResolve = null;
+    if (releaseHeldRoute) {
+      releaseHeldRoute();
+      releaseHeldRoute = null;
     }
-    await page.waitForTimeout(300);
+    if (routeSettledPromise) await routeSettledPromise;
     await expect(resultsContainer).not.toBeVisible();
 
     // Reset back to temperature
     await page.locator('[data-testid="transect-variable-select"]').selectOption('temperature');
 
     // --- Case C: Global timeline step change while request is pending ---
+    reqPromise = new Promise((res) => { onRequestReceived = res; });
     await submitBtn.click();
+    await reqPromise;
     await expect(loadingIndicator).toBeVisible();
 
     // Click next forecast step in bottom control bar (behind backdrop)
@@ -640,15 +763,17 @@ test.describe('Selected Phase 07: User-Chosen Ocean Cross-Section Workflow', () 
     await stepFwdBtn.evaluate((btn) => btn.click());
     await expect(loadingIndicator).not.toBeVisible();
 
-    if (heldResolve) {
-      heldResolve();
-      heldResolve = null;
+    if (releaseHeldRoute) {
+      releaseHeldRoute();
+      releaseHeldRoute = null;
     }
-    await page.waitForTimeout(300);
+    if (routeSettledPromise) await routeSettledPromise;
     await expect(resultsContainer).not.toBeVisible();
 
     // --- Case D: View mode switch while request is pending ---
+    reqPromise = new Promise((res) => { onRequestReceived = res; });
     await submitBtn.click();
+    await reqPromise;
     await expect(loadingIndicator).toBeVisible();
 
     // Switch view mode via EXPLORE navigation (behind backdrop)
@@ -658,11 +783,11 @@ test.describe('Selected Phase 07: User-Chosen Ocean Cross-Section Workflow', () 
     await blockBtn.evaluate((btn) => btn.click());
     await expect(loadingIndicator).not.toBeVisible();
 
-    if (heldResolve) {
-      heldResolve();
-      heldResolve = null;
+    if (releaseHeldRoute) {
+      releaseHeldRoute();
+      releaseHeldRoute = null;
     }
-    await page.waitForTimeout(300);
+    if (routeSettledPromise) await routeSettledPromise;
     await expect(resultsContainer).not.toBeVisible();
 
     await page.screenshot({ path: path.join(evidenceDir, 'TC-P07-10-pending-invalidation-suite.png') });

@@ -8,7 +8,7 @@ User decision: 28 September 2026. Implement all eight items from Codex's reviewe
 | Deep-physics missing-data handling | 5/5 | Stop replacing missing measurements with invented temperature/salinity inputs | Approved: Phase 04 |
 | Independent layer controls | 4/5 | Separate switches for currents and observation markers | Accepted after Codex Phase 05 review |
 | Anomaly controls and source separation | 4/5 | Select error variable/threshold and keep real and synthetic observations separate | Accepted after Codex Phase 06 review |
-| Ocean cross-section workflow | 4/5 | Choose two coordinates and inspect a vertical cut through the ocean | READY FOR CODEX REVIEW |
+| Ocean cross-section workflow | 4/5 | Choose two coordinates and inspect a vertical cut through the ocean | Corrections required after Codex review: assert exact physical scaling, remove minimum-height distortion, and make pending-request tests deterministic |
 | Observation-ID search | 3/5 | Search an Argo identifier and select/focus its actual platform | Selected: subsequent reviewed phase |
 | Download progress/cancellation | 3/5 | Track dataset downloads through completion/failure and cancel running jobs | Selected: subsequent reviewed phase |
 | Buoy observations | 2/5 | Browse supported buoy measurements using an explicit list/detail contract | Selected: subsequent reviewed phase |

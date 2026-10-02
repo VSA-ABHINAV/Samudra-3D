@@ -485,7 +485,7 @@ export default function CrossSectionModal({
                   return {
                     depth: d,
                     yTop,
-                    height: Math.max(1, yBottom - yTop),
+                    height: yBottom - yTop,
                     yCenter
                   };
                 });
@@ -505,7 +505,7 @@ export default function CrossSectionModal({
                   return {
                     depth: d,
                     yTop,
-                    height: Math.max(1, yBottom - yTop),
+                    height: yBottom - yTop,
                     yCenter
                   };
                 });
