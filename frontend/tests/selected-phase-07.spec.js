@@ -401,7 +401,7 @@ test.describe('Selected Phase 07: User-Chosen Ocean Cross-Section Workflow', () 
     await page.screenshot({ path: path.join(evidenceDir, 'TC-P07-07-input-edit-clears-result.png') });
   });
 
-  test('TC-P07-08: Rendered null/land cells show distinct hatched pattern and physical depth axis spacing', async ({ page }) => {
+  test('TC-P07-08: Rendered SVG geometry verifies proportional depth spacing, boundary limits, and no-data inspection', async ({ page }) => {
     await setupStandardRoutes(page);
     await page.goto('/');
     await waitForDatasetReady(page);
@@ -411,7 +411,53 @@ test.describe('Selected Phase 07: User-Chosen Ocean Cross-Section Workflow', () 
 
     await expect(page.locator('[data-testid="transect-results-container"]')).toBeVisible({ timeout: 5000 });
 
-    // Verify no-data legend is rendered
+    // 1. Inspect rendered cell geometry for ascending uneven depths [0, 10, 50, 100, 200, 500]
+    const cellRow0 = page.locator('[data-testid="cell-valid-0-0"]');
+    const cellRow1 = page.locator('[data-testid="cell-valid-1-0"]');
+    const cellRow2 = page.locator('[data-testid="cell-valid-2-0"]');
+    const cellRow3 = page.locator('[data-testid="cell-valid-3-0"]');
+    const cellRow4 = page.locator('[data-testid="cell-valid-4-0"]');
+    const cellRow5 = page.locator('[data-testid="cell-valid-5-0"]');
+
+    await expect(cellRow0).toBeVisible();
+    await expect(cellRow5).toBeVisible();
+
+    const y0 = parseFloat(await cellRow0.getAttribute('y') || '0');
+    const h0 = parseFloat(await cellRow0.getAttribute('height') || '0');
+    const y1 = parseFloat(await cellRow1.getAttribute('y') || '0');
+    const h1 = parseFloat(await cellRow1.getAttribute('height') || '0');
+    const y2 = parseFloat(await cellRow2.getAttribute('y') || '0');
+    const h2 = parseFloat(await cellRow2.getAttribute('height') || '0');
+    const y3 = parseFloat(await cellRow3.getAttribute('y') || '0');
+    const h3 = parseFloat(await cellRow3.getAttribute('height') || '0');
+    const y4 = parseFloat(await cellRow4.getAttribute('y') || '0');
+    const h4 = parseFloat(await cellRow4.getAttribute('height') || '0');
+    const y5 = parseFloat(await cellRow5.getAttribute('y') || '0');
+    const h5 = parseFloat(await cellRow5.getAttribute('height') || '0');
+
+    // Calculate cell centers
+    const c0 = y0 + h0 / 2;
+    const c1 = y1 + h1 / 2;
+    const c2 = y2 + h2 / 2;
+    const c3 = y3 + h3 / 2;
+    const c4 = y4 + h4 / 2;
+    const c5 = y5 + h5 / 2;
+
+    // Strict vertical ordering of cell centers
+    expect(c0).toBeLessThan(c1);
+    expect(c1).toBeLessThan(c2);
+    expect(c2).toBeLessThan(c3);
+    expect(c3).toBeLessThan(c4);
+    expect(c4).toBeLessThan(c5);
+
+    // Deepest cell (row 5: ~300m thick interval) must be significantly taller than surface cell (row 0: ~10m thick interval)
+    expect(h5).toBeGreaterThan(h0 * 10);
+
+    // Strict plot area boundary containment: plotTop=10, plotHeight=220, so [10, 230]
+    expect(y0).toBeGreaterThanOrEqual(10.0);
+    expect(y5 + h5).toBeLessThanOrEqual(230.01);
+
+    // 2. Verify no-data legend and tooltips
     const legend = page.locator('[data-testid="transect-no-data-legend"]');
     await expect(legend).toBeVisible();
     await expect(legend).toContainText('No Data / Land Mask');
@@ -426,11 +472,200 @@ test.describe('Selected Phase 07: User-Chosen Ocean Cross-Section Workflow', () 
     await expect(hoverSounding).toContainText('No Data (Land / Masked)');
 
     // Hover valid cell at depth 0, point 0
-    const validCell = page.locator('[data-testid="cell-valid-0-0"]');
-    await validCell.hover();
+    await cellRow0.hover();
     await expect(hoverSounding).toContainText('28.50 °C');
+    await expect(hoverSounding).toContainText('Depth: 0 m');
 
     await page.screenshot({ path: path.join(evidenceDir, 'TC-P07-08-nodata-and-depth-inspection.png') });
+  });
+
+  test('TC-P07-09: Descending depth arrays correctly orient surface at top and reject non-monotonic coordinates', async ({ page }) => {
+    // 1. Descending depth payload: depths 500 down to 0
+    const DESCENDING_TRANSECT = {
+      ...MOCK_TRANSECT_TEMP,
+      depth_levels: [500.0, 200.0, 100.0, 50.0, 10.0, 0.0],
+      matrix: [
+        [6.5, 6.6, 6.7, 6.8, 6.7, 6.6, 6.5, 6.4, null, null], // row 0: 500m (deep)
+        [12.5, 12.6, 12.7, 12.8, 12.7, 12.6, 12.5, 12.4, null, null], // row 1: 200m
+        [18.5, 18.6, 18.7, 18.8, 18.7, 18.6, 18.5, 18.4, 18.3, 18.2], // row 2: 100m
+        [24.5, 24.6, 24.7, 24.8, 24.7, 24.6, 24.5, 24.4, 24.3, 24.2], // row 3: 50m
+        [28.0, 28.1, 28.2, 28.3, 28.2, 28.1, 28.0, 27.9, 27.8, 27.7], // row 4: 10m
+        [28.5, 28.6, 28.7, 28.8, 28.7, 28.6, 28.5, 28.4, 28.3, 28.2]  // row 5: 0m (surface)
+      ]
+    };
+
+    let activePayload = DESCENDING_TRANSECT;
+
+    await setupStandardRoutes(page);
+    await page.route('**/api/ocean/transect*', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(activePayload)
+      });
+    });
+
+    await page.goto('/');
+    await waitForDatasetReady(page);
+
+    await page.locator('[data-testid="bottombar-transect-btn"]').click();
+    await page.locator('[data-testid="transect-submit-btn"]').click();
+
+    await expect(page.locator('[data-testid="transect-results-container"]')).toBeVisible({ timeout: 5000 });
+
+    // In descending ordering:
+    // row 5 is depth 0m (shallow/surface), so it must be mapped near the top of the plot (y ~ 10)
+    // row 0 is depth 500m (deep/abyss), so it must be mapped near the bottom of the plot (y + height ~ 230)
+    const cellRow0 = page.locator('[data-testid="cell-valid-0-0"]'); // 500m deep
+    const cellRow5 = page.locator('[data-testid="cell-valid-5-0"]'); // 0m surface
+
+    await expect(cellRow0).toBeVisible();
+    await expect(cellRow5).toBeVisible();
+
+    const y0 = parseFloat(await cellRow0.getAttribute('y') || '0');
+    const h0 = parseFloat(await cellRow0.getAttribute('height') || '0');
+    const y5 = parseFloat(await cellRow5.getAttribute('y') || '0');
+    const h5 = parseFloat(await cellRow5.getAttribute('height') || '0');
+
+    // Surface row (row 5, depth 0m) must be at the top
+    expect(y5).toBeGreaterThanOrEqual(10.0);
+    expect(y5).toBeLessThan(y0);
+
+    // Abyss row (row 0, depth 500m) must extend to the bottom
+    expect(y0 + h0).toBeLessThanOrEqual(230.01);
+    expect(y0 + h0).toBeGreaterThan(y5 + h5);
+
+    // Deep row 0 (~300m thick interval) must be taller than surface row 5 (~10m thick interval)
+    expect(h0).toBeGreaterThan(h5 * 10);
+
+    // Hover row 5: must report Depth: 0 m and temperature 28.50 °C
+    await cellRow5.hover();
+    const hoverSounding = page.locator('[data-testid="transect-hover-sounding"]');
+    await expect(hoverSounding).toContainText('Depth: 0 m');
+    await expect(hoverSounding).toContainText('28.50 °C');
+
+    // Hover row 0: must report Depth: 500 m and temperature 6.50 °C
+    await cellRow0.hover();
+    await expect(hoverSounding).toContainText('Depth: 500 m');
+    await expect(hoverSounding).toContainText('6.50 °C');
+
+    // 2. Non-monotonic depth array rejection: [0.0, 50.0, 20.0, 100.0]
+    activePayload = {
+      ...MOCK_TRANSECT_TEMP,
+      depth_levels: [0.0, 50.0, 20.0, 100.0],
+      matrix: [
+        [28.5, 28.6, 28.7, 28.8, 28.7, 28.6, 28.5, 28.4, 28.3, 28.2],
+        [24.5, 24.6, 24.7, 24.8, 24.7, 24.6, 24.5, 24.4, 24.3, 24.2],
+        [26.0, 26.1, 26.2, 26.3, 26.2, 26.1, 26.0, 25.9, 25.8, 25.7],
+        [18.5, 18.6, 18.7, 18.8, 18.7, 18.6, 18.5, 18.4, 18.3, 18.2]
+      ]
+    };
+
+    // Retry computation with non-monotonic depths
+    await page.locator('[data-testid="transect-submit-btn"]').click();
+    const depthValError = page.locator('[data-testid="transect-depth-validation-error"]');
+    await expect(depthValError).toBeVisible({ timeout: 5000 });
+    await expect(depthValError).toContainText('strictly monotonic');
+
+    await page.screenshot({ path: path.join(evidenceDir, 'TC-P07-09-descending-and-monotonicity.png') });
+  });
+
+  test('TC-P07-10: Invalidation when endpoint edit, variable change, timeline change, or view switch occurs while request is pending', async ({ page }) => {
+    let heldResolve = null;
+
+    await setupStandardRoutes(page);
+    await page.route('**/api/ocean/transect*', async (route) => {
+      await new Promise((resolve) => {
+        heldResolve = resolve;
+      });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(MOCK_TRANSECT_TEMP)
+      });
+    });
+
+    await page.goto('/');
+    await waitForDatasetReady(page);
+
+    const transectBtn = page.locator('[data-testid="bottombar-transect-btn"]');
+    await transectBtn.click();
+
+    const submitBtn = page.locator('[data-testid="transect-submit-btn"]');
+    const loadingIndicator = page.locator('[data-testid="transect-loading-indicator"]');
+    const resultsContainer = page.locator('[data-testid="transect-results-container"]');
+
+    // --- Case A: Endpoint edit while request is pending ---
+    await submitBtn.click();
+    await expect(loadingIndicator).toBeVisible();
+
+    // Edit lat1 input while request is in flight
+    await page.locator('[data-testid="transect-lat1-input"]').fill('12.5');
+    await expect(loadingIndicator).not.toBeVisible();
+
+    // Release held response
+    if (heldResolve) {
+      heldResolve();
+      heldResolve = null;
+    }
+    await page.waitForTimeout(300);
+
+    // Stale result must NOT be displayed
+    await expect(resultsContainer).not.toBeVisible();
+
+    // --- Case B: Variable change while request is pending ---
+    await submitBtn.click();
+    await expect(loadingIndicator).toBeVisible();
+
+    // Change variable select in modal
+    await page.locator('[data-testid="transect-variable-select"]').selectOption('salinity');
+    await expect(loadingIndicator).not.toBeVisible();
+
+    if (heldResolve) {
+      heldResolve();
+      heldResolve = null;
+    }
+    await page.waitForTimeout(300);
+    await expect(resultsContainer).not.toBeVisible();
+
+    // Reset back to temperature
+    await page.locator('[data-testid="transect-variable-select"]').selectOption('temperature');
+
+    // --- Case C: Global timeline step change while request is pending ---
+    await submitBtn.click();
+    await expect(loadingIndicator).toBeVisible();
+
+    // Click next forecast step in bottom control bar (behind backdrop)
+    const stepFwdBtn = page.getByRole('button', { name: 'Next Forecast Step' });
+    await stepFwdBtn.evaluate((btn) => btn.click());
+    await expect(loadingIndicator).not.toBeVisible();
+
+    if (heldResolve) {
+      heldResolve();
+      heldResolve = null;
+    }
+    await page.waitForTimeout(300);
+    await expect(resultsContainer).not.toBeVisible();
+
+    // --- Case D: View mode switch while request is pending ---
+    await submitBtn.click();
+    await expect(loadingIndicator).toBeVisible();
+
+    // Switch view mode via EXPLORE navigation (behind backdrop)
+    const exploreBtn = page.getByRole('button', { name: /EXPLORE/i });
+    await exploreBtn.evaluate((btn) => btn.click());
+    const blockBtn = page.getByRole('button', { name: /3D Ocean Volume Block/i });
+    await blockBtn.evaluate((btn) => btn.click());
+    await expect(loadingIndicator).not.toBeVisible();
+
+    if (heldResolve) {
+      heldResolve();
+      heldResolve = null;
+    }
+    await page.waitForTimeout(300);
+    await expect(resultsContainer).not.toBeVisible();
+
+    await page.screenshot({ path: path.join(evidenceDir, 'TC-P07-10-pending-invalidation-suite.png') });
   });
 
 });

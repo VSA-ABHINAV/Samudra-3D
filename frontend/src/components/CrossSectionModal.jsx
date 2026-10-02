@@ -416,47 +416,101 @@ export default function CrossSectionModal({
             const distances = transectData.distances_km || [];
             const numDistances = distances.length;
 
-            // Validate depth array: all must be finite numbers
-            const areDepthsValid = rawDepths.length > 0 && rawDepths.every((d) => typeof d === 'number' && Number.isFinite(d));
-            if (!areDepthsValid) {
+            // Validate depth array: non-empty, finite numbers, strictly monotonic
+            let depthValidationError = null;
+            if (!Array.isArray(rawDepths) || rawDepths.length === 0) {
+              depthValidationError = 'No depth levels provided in transect payload.';
+            } else if (!rawDepths.every((d) => typeof d === 'number' && Number.isFinite(d))) {
+              depthValidationError = 'Depth levels must all be finite numeric values.';
+            } else if (matrix.length !== rawDepths.length) {
+              depthValidationError = `Data matrix row count (${matrix.length}) does not match depth levels count (${rawDepths.length}).`;
+            } else if (rawDepths.length > 1) {
+              let isAscending = true;
+              let isDescending = true;
+              for (let i = 0; i < rawDepths.length - 1; i++) {
+                if (rawDepths[i + 1] <= rawDepths[i]) {
+                  isAscending = false;
+                }
+                if (rawDepths[i + 1] >= rawDepths[i]) {
+                  isDescending = false;
+                }
+              }
+              if (!isAscending && !isDescending) {
+                depthValidationError = 'Depth levels must be strictly monotonic (strictly ascending or strictly descending). Duplicate or non-monotonic depths are not supported.';
+              }
+            }
+
+            if (depthValidationError) {
               return (
-                <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-800 text-rose-300">
-                  Malformed or non-finite depth coordinate array received.
+                <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-800 text-rose-300" data-testid="transect-depth-validation-error">
+                  <div className="font-semibold text-sm mb-1 flex items-center gap-2">
+                    <svg className="w-4 h-4 text-rose-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    <span>Depth Coordinate Validation Error</span>
+                  </div>
+                  <p className="text-xs text-rose-200/90">{depthValidationError}</p>
                 </div>
               );
             }
 
             // Quantitative physical depth layout calculation
-            const minDepth = Math.min(...rawDepths);
-            const maxDepth = Math.max(...rawDepths);
-            const depthSpan = maxDepth - minDepth || 1.0;
+            const K = rawDepths.length;
             const plotTop = 10;
             const plotHeight = 220;
             const plotLeft = 55;
             const plotWidth = 730;
 
-            // Compute vertical cell top and bottom boundaries for each depth layer proportional to physical depth
-            const layerBounds = rawDepths.map((d, k) => {
-              let topD;
-              let bottomD;
-              if (k === 0) {
-                topD = d;
-                bottomD = rawDepths.length > 1 ? (d + rawDepths[1]) / 2 : d + 10;
-              } else if (k === rawDepths.length - 1) {
-                topD = (rawDepths[k - 1] + d) / 2;
-                bottomD = d + (d - rawDepths[k - 1]) / 2;
-              } else {
-                topD = (rawDepths[k - 1] + d) / 2;
-                bottomD = (d + rawDepths[k + 1]) / 2;
-              }
-              const yTop = plotTop + ((topD - minDepth) / depthSpan) * plotHeight;
-              const yBottom = plotTop + ((bottomD - minDepth) / depthSpan) * plotHeight;
-              return {
+            let layerBounds = [];
+            if (K === 1) {
+              const d = rawDepths[0];
+              layerBounds.push({
                 depth: d,
-                yTop,
-                height: Math.max(2, yBottom - yTop)
-              };
-            });
+                yTop: plotTop,
+                height: plotHeight,
+                yCenter: plotTop + plotHeight / 2
+              });
+            } else {
+              const isAscending = rawDepths[1] > rawDepths[0];
+              if (isAscending) {
+                // rawDepths[0] < rawDepths[1] < ... < rawDepths[K-1]
+                const zSurface = rawDepths[0] - (rawDepths[1] - rawDepths[0]) / 2;
+                const zDeep = rawDepths[K - 1] + (rawDepths[K - 1] - rawDepths[K - 2]) / 2;
+                const deltaZ = zDeep - zSurface || 1.0;
+
+                layerBounds = rawDepths.map((d, k) => {
+                  const zTop = k === 0 ? zSurface : (rawDepths[k - 1] + d) / 2;
+                  const zBottom = k === K - 1 ? zDeep : (d + rawDepths[k + 1]) / 2;
+                  const yTop = plotTop + ((zTop - zSurface) / deltaZ) * plotHeight;
+                  const yBottom = plotTop + ((zBottom - zSurface) / deltaZ) * plotHeight;
+                  const yCenter = plotTop + ((d - zSurface) / deltaZ) * plotHeight;
+                  return {
+                    depth: d,
+                    yTop,
+                    height: Math.max(1, yBottom - yTop),
+                    yCenter
+                  };
+                });
+              } else {
+                // rawDepths[0] > rawDepths[1] > ... > rawDepths[K-1] (descending)
+                // rawDepths[K-1] is shallowest (surface), rawDepths[0] is deepest
+                const zSurface = rawDepths[K - 1] - (rawDepths[K - 2] - rawDepths[K - 1]) / 2;
+                const zDeep = rawDepths[0] + (rawDepths[0] - rawDepths[1]) / 2;
+                const deltaZ = zDeep - zSurface || 1.0;
+
+                layerBounds = rawDepths.map((d, k) => {
+                  const zTop = k === K - 1 ? zSurface : (d + rawDepths[k + 1]) / 2;
+                  const zBottom = k === 0 ? zDeep : (rawDepths[k - 1] + d) / 2;
+                  const yTop = plotTop + ((zTop - zSurface) / deltaZ) * plotHeight;
+                  const yBottom = plotTop + ((zBottom - zSurface) / deltaZ) * plotHeight;
+                  const yCenter = plotTop + ((d - zSurface) / deltaZ) * plotHeight;
+                  return {
+                    depth: d,
+                    yTop,
+                    height: Math.max(1, yBottom - yTop),
+                    yCenter
+                  };
+                });
+              }
+            }
 
             return (
               <div className="space-y-4" data-testid="transect-results-container">
@@ -518,7 +572,7 @@ export default function CrossSectionModal({
                         </pattern>
                       </defs>
 
-                      {/* Grid Cells rendered with physical depth heights */}
+                      {/* Grid Cells rendered with bounded physical depth heights */}
                       {matrix.map((row, dIdx) => {
                         const bounds = layerBounds[dIdx];
                         if (!bounds) return null;
@@ -551,6 +605,11 @@ export default function CrossSectionModal({
                               strokeWidth={isValid ? 0 : 0.5}
                               opacity={isValid ? 0.95 : 0.85}
                               data-testid={isValid ? `cell-valid-${dIdx}-${pIdx}` : `cell-nodata-${dIdx}-${pIdx}`}
+                              data-depth-idx={dIdx}
+                              data-point-idx={pIdx}
+                              data-depth-val={depth}
+                              data-cell-y={y}
+                              data-cell-height={cellHeight}
                               onMouseEnter={() => {
                                 setHoveredCell({
                                   distance: dist,
@@ -564,14 +623,20 @@ export default function CrossSectionModal({
                       })}
 
                       {/* Physical Depth Axis Labels (Y-axis) */}
-                      {rawDepths.map((d, idx) => {
-                        const yPos = plotTop + ((d - minDepth) / depthSpan) * plotHeight + 4;
-                        return (
-                          <text key={`d-${idx}`} x="48" y={yPos} fill="#94a3b8" fontSize="8.5" textAnchor="end" fontFamily="monospace">
-                            {d}m
-                          </text>
-                        );
-                      })}
+                      {layerBounds.map((bounds, idx) => (
+                        <text
+                          key={`d-${idx}`}
+                          x="48"
+                          y={bounds.yCenter + 3.5}
+                          fill="#94a3b8"
+                          fontSize="8.5"
+                          textAnchor="end"
+                          fontFamily="monospace"
+                          data-testid={`transect-depth-label-${idx}`}
+                        >
+                          {bounds.depth}m
+                        </text>
+                      ))}
 
                       {/* Distance Axis Labels (X-axis) */}
                       {[0, 0.25, 0.5, 0.75, 1.0].map((frac, idx) => {
