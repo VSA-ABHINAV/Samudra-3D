@@ -1,10 +1,50 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { PRECISION_OCEAN_PLACES } from '../utils/graticules.js';
 import { getDatasetProvenance } from '../utils/scientificPresentation.js';
+import { fetchArgoFloatById } from '../services/api.js';
+
+/**
+ * Normalizes and extracts Argo WMO identifier candidates.
+ * Supports: "2902145", "ARGO_2902145", "argo_2902145", "Argo 2902145", "argo-2902145", "ARGO_2902210_REAL", "ARGO_TEST_QC_OUTLIER"
+ */
+export function parseArgoQuery(query) {
+  if (!query || typeof query !== 'string') return null;
+  const trimmed = query.trim();
+  if (!trimmed) return null;
+
+  // Case 1: Prefixed with ARGO_ or ARGO- or ARGO (case-insensitive)
+  const argoPrefixMatch = trimmed.match(/^argo[_\s-]?([a-z0-9_-]+)$/i);
+  if (argoPrefixMatch) {
+    const rawRest = argoPrefixMatch[1].trim();
+    const normalized = `ARGO_${rawRest.toUpperCase()}`;
+    return {
+      raw: trimmed,
+      lookupId: normalized,
+      fallbackId: rawRest,
+      displayId: normalized,
+      isArgoPattern: true
+    };
+  }
+
+  // Case 2: Pure 5 to 7 digit numeric WMO identifier (e.g. "2902145", "2902198", "2902210")
+  const wmoDigitsMatch = trimmed.match(/^(\d{5,7})$/);
+  if (wmoDigitsMatch) {
+    const digits = wmoDigitsMatch[1];
+    return {
+      raw: trimmed,
+      lookupId: `ARGO_${digits}`,
+      fallbackId: digits,
+      displayId: `ARGO_${digits}`,
+      isArgoPattern: true
+    };
+  }
+
+  return null;
+}
 
 /**
  * Header - Professional Scientific Workstation Top Bar
- * Adheres to .
+ * Adheres to INCOIS design language.
  * 
  * Top-left: SAMUDRA-3D / Ocean Intelligence Platform
  * Center: Global Search Box + Clean Primary Navigation (EXPLORE, OBSERVATIONS, ANALYSIS, DATA, OPERATIONS)
@@ -24,13 +64,19 @@ export default function Header({
   onOpenCycloneModal = null,
   onOpenInDepthAnalysis = null,
   onSelectRegion = null,
+  onSelectArgoPlatform = null,
   onNavigate = null,
   onLogout = null
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeMenu, setActiveMenu] = useState(null); // 'EXPLORE' | 'OBSERVATIONS' | 'ANALYSIS' | 'DATA' | 'OPERATIONS' | 'USER' | null
   const [searchResults, setSearchResults] = useState([]);
+  const [isSearchingArgo, setIsSearchingArgo] = useState(false);
+  const [argoSearchStatus, setArgoSearchStatus] = useState(null); // { type: 'loading' | 'not_found' | 'error' | 'success', message: string } | null
   const menuRef = useRef(null);
+
+  const searchRequestIdRef = useRef(0);
+  const searchAbortControllerRef = useRef(null);
 
   const isAdmin = currentUser?.role === 'ADMIN';
   const provenance = getDatasetProvenance({ activeDataset });
@@ -47,13 +93,31 @@ export default function Header({
     return () => window.document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Cleanup in-flight search requests on unmount
+  useEffect(() => {
+    return () => {
+      if (searchAbortControllerRef.current) {
+        searchAbortControllerRef.current.abort();
+      }
+    };
+  }, []);
+
   // Global Search Handler (supports place name, lat/lon coords, and WMO ID)
   const handleSearchChange = (e) => {
     const val = e.target.value;
     setSearchQuery(val);
 
+    // Cancel any previous in-flight Argo lookup request
+    if (searchAbortControllerRef.current) {
+      searchAbortControllerRef.current.abort();
+      searchAbortControllerRef.current = null;
+    }
+    const currentReqId = ++searchRequestIdRef.current;
+
     if (!val.trim()) {
       setSearchResults([]);
+      setIsSearchingArgo(false);
+      setArgoSearchStatus(null);
       return;
     }
 
@@ -61,13 +125,13 @@ export default function Header({
 
     // 1. Check if coordinate query (e.g. "13.25, 80.31" or "13.25 80.31")
     const coordMatch = q.match(/^([-+]?\d*\.?\d+)[,\s]+([-+]?\d*\.?\d+)$/);
-    const results = [];
+    const staticResults = [];
 
     if (coordMatch) {
       const lat = parseFloat(coordMatch[1]);
       const lon = parseFloat(coordMatch[2]);
       if (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
-        results.push({
+        staticResults.push({
           id: `coord-${lat}-${lon}`,
           name: `Coordinate: ${lat.toFixed(3)}°N, ${lon.toFixed(3)}°E`,
           lat,
@@ -81,7 +145,7 @@ export default function Header({
     // 2. Check places from graticules
     for (const p of PRECISION_OCEAN_PLACES) {
       if (p.name.toLowerCase().includes(q) || (p.tag && p.tag.toLowerCase().includes(q))) {
-        results.push({
+        staticResults.push({
           id: p.id,
           name: `${p.name} [${p.tag || 'Sector'}]`,
           lat: p.lat,
@@ -92,15 +156,103 @@ export default function Header({
       }
     }
 
-    setSearchResults(results.slice(0, 6));
+    // 3. Check if query matches supported Argo WMO ID format
+    const argoCandidate = parseArgoQuery(val);
+
+    if (!argoCandidate) {
+      setIsSearchingArgo(false);
+      setArgoSearchStatus(null);
+      setSearchResults(staticResults.slice(0, 6));
+      return;
+    }
+
+    // Candidate matches Argo ID pattern: show immediate static results while fetching platform detail
+    setIsSearchingArgo(true);
+    setArgoSearchStatus({ type: 'loading', message: `Searching Argo platform ${argoCandidate.displayId}...` });
+    setSearchResults(staticResults.slice(0, 6));
+
+    const controller = new AbortController();
+    searchAbortControllerRef.current = controller;
+
+    fetchArgoFloatById(argoCandidate.lookupId, controller.signal)
+      .then((detail) => {
+        if (searchRequestIdRef.current !== currentReqId) return;
+        if (detail && (detail.platform_type === 'argo' || detail.id)) {
+          const argoItem = {
+            id: detail.id,
+            name: detail.name || `Argo Float ${detail.wmo_id || detail.id}`,
+            wmo_id: detail.wmo_id || detail.metadata?.wmo_id,
+            lat: detail.lat,
+            lon: detail.lon,
+            dist: 120,
+            type: 'argo',
+            floatDetail: detail
+          };
+          setSearchResults([argoItem, ...staticResults].slice(0, 6));
+          setIsSearchingArgo(false);
+          setArgoSearchStatus({ type: 'success', message: `Found Argo platform ${detail.id}` });
+        } else {
+          setIsSearchingArgo(false);
+          setArgoSearchStatus({ type: 'not_found', message: `No Argo platform found for ID "${val.trim()}"` });
+        }
+      })
+      .catch((err) => {
+        if (err.name === 'AbortError') return;
+        if (searchRequestIdRef.current !== currentReqId) return;
+
+        // If normalized lookup failed and fallback ID exists, attempt fallback
+        if (argoCandidate.fallbackId && argoCandidate.fallbackId !== argoCandidate.lookupId) {
+          fetchArgoFloatById(argoCandidate.fallbackId, controller.signal)
+            .then((fbDetail) => {
+              if (searchRequestIdRef.current !== currentReqId) return;
+              if (fbDetail && (fbDetail.platform_type === 'argo' || fbDetail.id)) {
+                const argoItem = {
+                  id: fbDetail.id,
+                  name: fbDetail.name || `Argo Float ${fbDetail.wmo_id || fbDetail.id}`,
+                  wmo_id: fbDetail.wmo_id || fbDetail.metadata?.wmo_id,
+                  lat: fbDetail.lat,
+                  lon: fbDetail.lon,
+                  dist: 120,
+                  type: 'argo',
+                  floatDetail: fbDetail
+                };
+                setSearchResults([argoItem, ...staticResults].slice(0, 6));
+                setIsSearchingArgo(false);
+                setArgoSearchStatus({ type: 'success', message: `Found Argo platform ${fbDetail.id}` });
+                return;
+              }
+              setIsSearchingArgo(false);
+              setArgoSearchStatus({ type: 'not_found', message: `No Argo platform found for ID "${val.trim()}"` });
+            })
+            .catch((fbErr) => {
+              if (fbErr.name === 'AbortError') return;
+              if (searchRequestIdRef.current !== currentReqId) return;
+              setIsSearchingArgo(false);
+              setArgoSearchStatus({ type: 'not_found', message: `No Argo platform found for ID "${val.trim()}"` });
+            });
+          return;
+        }
+
+        setIsSearchingArgo(false);
+        setArgoSearchStatus({ type: 'not_found', message: `No Argo platform found for ID "${val.trim()}"` });
+      });
   };
 
   const handleSelectSearchResult = (res) => {
-    if (onSelectRegion) {
+    if (!res) return;
+    if (res.type === 'argo' && res.floatDetail) {
+      if (onSelectArgoPlatform) {
+        onSelectArgoPlatform(res.floatDetail);
+      } else if (onSelectRegion) {
+        onSelectRegion(res);
+      }
+    } else if (onSelectRegion) {
       onSelectRegion(res);
     }
     setSearchQuery('');
     setSearchResults([]);
+    setIsSearchingArgo(false);
+    setArgoSearchStatus(null);
   };
 
   const toggleMenu = (menuName) => {
@@ -137,29 +289,89 @@ export default function Header({
             value={searchQuery}
             onChange={handleSearchChange}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && searchResults.length > 0) {
+              if (e.key === 'Escape') {
                 e.preventDefault();
-                handleSelectSearchResult(searchResults[0]);
+                setSearchResults([]);
+                setArgoSearchStatus(null);
+                setIsSearchingArgo(false);
+              } else if (e.key === 'Enter') {
+                if (searchResults.length > 0) {
+                  e.preventDefault();
+                  handleSelectSearchResult(searchResults[0]);
+                }
               }
             }}
             className="bg-transparent border-none outline-none text-xs w-full text-slate-200 placeholder-slate-500"
             aria-label="Search ocean location or coordinates"
+            data-testid="global-search-input"
           />
         </div>
 
-        {searchResults.length > 0 && (
-          <div className="search-results-dropdown glassmorphic-panel absolute left-0 right-0 top-full mt-1.5 z-50 rounded-lg shadow-2xl p-1 max-h-60 overflow-y-auto">
-            {searchResults.map((r) => (
-              <button
-                key={r.id}
-                type="button"
-                className="w-full text-left px-3 py-1.5 rounded text-xs text-slate-200 hover:bg-sky-950/80 hover:text-sky-300 font-mono flex items-center justify-between transition"
-                onClick={() => handleSelectSearchResult(r)}
+        {(searchResults.length > 0 || isSearchingArgo || argoSearchStatus?.type === 'not_found') && (
+          <div
+            className="search-results-dropdown glassmorphic-panel absolute left-0 right-0 top-full mt-1.5 z-50 rounded-lg shadow-2xl p-1 max-h-60 overflow-y-auto"
+            data-testid="search-results-dropdown"
+          >
+            {isSearchingArgo && (
+              <div
+                className="px-3 py-2 text-xs text-sky-400 font-mono flex items-center gap-2"
+                data-testid="argo-search-loading"
+                role="status"
               >
-                <span>{r.name}</span>
-                <span className="text-[10px] text-slate-500">{r.lat.toFixed(1)}°, {r.lon.toFixed(1)}°</span>
-              </button>
-            ))}
+                <span className="animate-spin" aria-hidden="true">⏳</span>
+                <span>{argoSearchStatus?.message || 'Searching Argo platform...'}</span>
+              </div>
+            )}
+
+            {!isSearchingArgo && argoSearchStatus?.type === 'not_found' && searchResults.length === 0 && (
+              <div
+                className="px-3 py-2 text-xs text-amber-400/90 font-mono"
+                data-testid="argo-search-not-found"
+                role="status"
+              >
+                <span>⚠️ {argoSearchStatus.message}</span>
+              </div>
+            )}
+
+            {searchResults.map((r) => {
+              if (r.type === 'argo') {
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    className="w-full text-left px-3 py-2 rounded text-xs text-slate-200 hover:bg-sky-950/80 hover:text-sky-300 font-mono flex items-center justify-between transition border-b border-slate-800/50 last:border-0"
+                    onClick={() => handleSelectSearchResult(r)}
+                    data-testid="argo-search-result"
+                    data-platform-id={r.id}
+                  >
+                    <div className="flex flex-col min-w-0 pr-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-sky-900/80 text-sky-300 border border-sky-700/60 uppercase">
+                          Argo Float
+                        </span>
+                        <span className="font-semibold text-white truncate">{r.name}</span>
+                      </div>
+                      <span className="text-[10px] text-slate-400 mt-0.5 font-mono">Platform ID: {r.id}</span>
+                    </div>
+                    <span className="text-[10px] text-sky-400 font-mono whitespace-nowrap">
+                      {r.lat.toFixed(2)}°N, {r.lon.toFixed(2)}°E
+                    </span>
+                  </button>
+                );
+              }
+              return (
+                <button
+                  key={r.id}
+                  type="button"
+                  className="w-full text-left px-3 py-1.5 rounded text-xs text-slate-200 hover:bg-sky-950/80 hover:text-sky-300 font-mono flex items-center justify-between transition"
+                  onClick={() => handleSelectSearchResult(r)}
+                  data-testid="search-result-item"
+                >
+                  <span>{r.name}</span>
+                  <span className="text-[10px] text-slate-500">{r.lat.toFixed(1)}°, {r.lon.toFixed(1)}°</span>
+                </button>
+              );
+            })}
           </div>
         )}
       </div>

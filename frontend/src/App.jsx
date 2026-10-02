@@ -710,6 +710,19 @@ export default function App() {
     []
   );
 
+  const handleSelectArgoPlatform = useCallback((argoDetail) => {
+    if (!argoDetail) return;
+    setShowArgo(true);
+    handleSelectFloat(argoDetail);
+    handleSelectRegion({
+      id: argoDetail.id,
+      name: argoDetail.name,
+      lat: argoDetail.lat,
+      lon: argoDetail.lon,
+      dist: 120
+    });
+  }, [handleSelectFloat, handleSelectRegion]);
+
   const _handleSelectFloatId = useCallback(
     (id) => {
       if (!id) {
@@ -1271,6 +1284,7 @@ export default function App() {
         onOpenCycloneModal={() => setIsCycloneModalOpen(true)}
         onOpenInDepthAnalysis={() => setIsInDepthModalOpen(true)}
         onSelectRegion={handleSelectRegion}
+        onSelectArgoPlatform={handleSelectArgoPlatform}
         selectedSectorId={selectedSectorId}
       />
       <main id="workspace" tabIndex={-1} className="scientific-workstation relative">

@@ -158,12 +158,38 @@ class TestCollocationEngine(unittest.TestCase):
 
     def test_08_unknown_profile_returns_404(self):
         """HTTP 404 for unknown profile ID."""
+        res = self.client.get("/api/insitu/argo/UNKNOWN_FLOAT_XYZ")
+        self.assertEqual(res.status_code, 404)
+
         res = self.client.get("/api/collocation/profile/UNKNOWN_FLOAT_XYZ")
         self.assertEqual(res.status_code, 404)
 
         res = self.client.get("/api/collocation/glider/UNKNOWN_GLIDER_XYZ")
         self.assertEqual(res.status_code, 404)
         print("[OK] Unknown platform IDs returned HTTP 404")
+
+    def test_09_argo_profile_lookup_by_wmo_and_case(self):
+        """Argo ID lookup with exact ID, lowercase, WMO ID, and real sample."""
+        # 1. Exact ID
+        res_exact = self.client.get("/api/insitu/argo/ARGO_2902145")
+        self.assertEqual(res_exact.status_code, 200)
+        self.assertEqual(res_exact.json()["id"], "ARGO_2902145")
+
+        # 2. Lowercase prefix
+        res_lower = self.client.get("/api/insitu/argo/argo_2902145")
+        self.assertEqual(res_lower.status_code, 200)
+        self.assertEqual(res_lower.json()["id"], "ARGO_2902145")
+
+        # 3. Numeric WMO ID
+        res_wmo = self.client.get("/api/insitu/argo/2902145")
+        self.assertEqual(res_wmo.status_code, 200)
+        self.assertEqual(res_wmo.json()["id"], "ARGO_2902145")
+
+        # 4. Real sample WMO lookup
+        res_real = self.client.get("/api/insitu/argo/2902210")
+        self.assertEqual(res_real.status_code, 200)
+        self.assertEqual(res_real.json()["id"], "ARGO_2902210_REAL")
+        print("[OK] Argo float WMO ID and case-normalization lookups verified")
 
 if __name__ == "__main__":
     print("=== SAMUDRA-3D Collocation Engine Acceptance Test Suite ===")

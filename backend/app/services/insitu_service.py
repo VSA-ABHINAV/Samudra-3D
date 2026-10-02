@@ -514,8 +514,30 @@ class InsituDataService:
         return self._gliders_by_id.get(glider_id)
 
     def get_profile_by_id(self, profile_id: str) -> Optional[Dict[str, Any]]:
-        """Returns single profile or glider by identifier."""
-        return self._profiles_by_id.get(profile_id)
+        """Returns single profile or glider by identifier (supports exact ID, case-insensitive, and WMO ID)."""
+        if not profile_id:
+            return None
+        if profile_id in self._profiles_by_id:
+            return self._profiles_by_id[profile_id]
+
+        pid_clean = profile_id.strip()
+        pid_upper = pid_clean.upper()
+
+        # 1. Exact case-insensitive match on profile ID
+        for p in self._profiles_by_id.values():
+            if (p.get("id") or "").upper() == pid_upper:
+                return p
+
+        # 2. Match on WMO ID (e.g. '2902145' or 'ARGO_2902145')
+        digits_only = pid_upper[5:] if pid_upper.startswith("ARGO_") else pid_upper
+        for p in self._profiles_by_id.values():
+            if p.get("platform_type") != "argo":
+                continue
+            wmo = (p.get("wmo_id") or p.get("metadata", {}).get("wmo_id") or "").upper()
+            if wmo:
+                if wmo == pid_upper or wmo == digits_only or f"ARGO_{wmo}" == pid_upper:
+                    return p
+        return None
 
     def get_status(self) -> InsituStatusResponse:
         """Returns operational telemetry, ingestion summary, and ERDDAP integration status."""

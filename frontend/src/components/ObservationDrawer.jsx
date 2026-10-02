@@ -89,7 +89,7 @@ export default function ObservationDrawer({
   if (!isOpen) return null;
 
   return (
-    <aside className="observation-drawer glassmorphic-panel" aria-label="In-Situ Observation Fleet Drawer">
+    <aside className="observation-drawer glassmorphic-panel" aria-label="In-Situ Observation Fleet Drawer" data-testid="observation-drawer">
       <div className="drawer-header flex items-center justify-between p-4 border-b border-slate-700/60">
         <div>
           <div className="flex items-center gap-2">
