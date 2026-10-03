@@ -1099,20 +1099,22 @@ export async function startDatasetDownload(subsetParams, forceOverride = false, 
 }
 
 export async function fetchDownloadStatus(jobId, signal = null) {
-  const res = await fetch(`${API_BASE}/datasets/download/status/${jobId}`, { signal });
+  const res = await fetch(`${API_BASE}/datasets/download/status/${encodeURIComponent(jobId)}`, { signal });
   if (!res.ok) {
-    throw new Error(`Failed to poll download status: HTTP ${res.status}`);
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to poll download status: HTTP ${res.status}`);
   }
   return res.json();
 }
 
 export async function cancelDatasetDownload(jobId, signal = null) {
-  const res = await fetch(`${API_BASE}/datasets/download/cancel/${jobId}`, {
+  const res = await fetch(`${API_BASE}/datasets/download/cancel/${encodeURIComponent(jobId)}`, {
     method: 'POST',
     signal
   });
   if (!res.ok) {
-    throw new Error(`Failed to cancel download: HTTP ${res.status}`);
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to cancel download: HTTP ${res.status}`);
   }
   return res.json();
 }

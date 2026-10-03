@@ -406,25 +406,30 @@ class DownloadManager:
         target_file = self.raw_dir / response.recommended_output_filename
         part_file = self.raw_dir / f"{response.recommended_output_filename}.part"
 
-        job = {
-            "job_id": job_id,
-            "dataset_id": req.dataset_id,
-            "status": DownloadJobStatus.QUEUED,
-            "command": response.command,
-            "target_file": str(target_file),
-            "part_file": str(part_file),
-            "bytes_downloaded": 0,
-            "estimated_bytes": int(response.estimate.estimated_transfer_mb * 1024 * 1024),
-            "progress_pct": 0.0,
-            "error": None,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "completed_at": None,
-            "manifest": None,
-            "_process": None,
-            "_cancelled": False
-        }
-
         with self._lock:
+            # Prevent starting duplicate jobs that would collide with an active output
+            for j in self._jobs.values():
+                if j["status"] in (DownloadJobStatus.QUEUED, DownloadJobStatus.RUNNING):
+                    if j["target_file"] == str(target_file) or j["part_file"] == str(part_file):
+                        raise ValueError(f"A download job ({j['job_id']}) is already active for output '{response.recommended_output_filename}'.")
+
+            job = {
+                "job_id": job_id,
+                "dataset_id": req.dataset_id,
+                "status": DownloadJobStatus.QUEUED,
+                "command": response.command,
+                "target_file": str(target_file),
+                "part_file": str(part_file),
+                "bytes_downloaded": 0,
+                "estimated_bytes": int(response.estimate.estimated_transfer_mb * 1024 * 1024),
+                "progress_pct": 0.0,
+                "error": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": None,
+                "manifest": None,
+                "_process": None,
+                "_cancelled": False
+            }
             self._jobs[job_id] = job
 
         thread = threading.Thread(target=self._run_job, args=(job_id, req, response), daemon=True)
@@ -436,7 +441,7 @@ class DownloadManager:
         """Worker thread executing the copernicusmarine CLI command safely."""
         with self._lock:
             job = self._jobs.get(job_id)
-            if not job or job["_cancelled"]:
+            if not job or job["_cancelled"] or job["status"] == DownloadJobStatus.CANCELLED:
                 return
             job["status"] = DownloadJobStatus.RUNNING
 
@@ -456,18 +461,22 @@ class DownloadManager:
 
             stdout, stderr = process.communicate()
 
-            if job["_cancelled"]:
-                if part_file.exists():
-                    try:
-                        part_file.unlink()
-                    except Exception:
-                        pass
-                with self._lock:
+            with self._lock:
+                if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
                     job["status"] = DownloadJobStatus.CANCELLED
-                return
+                    if not job.get("completed_at"):
+                        job["completed_at"] = datetime.now(timezone.utc).isoformat()
+                    if part_file.exists():
+                        try:
+                            part_file.unlink()
+                        except Exception:
+                            pass
+                    return
 
             if process.returncode != 0:
                 with self._lock:
+                    if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
+                        return
                     job["status"] = DownloadJobStatus.FAILED
                     job["error"] = stderr or stdout or f"Command failed with code {process.returncode}"
                     job["completed_at"] = datetime.now(timezone.utc).isoformat()
@@ -482,6 +491,8 @@ class DownloadManager:
                     time_range={"start": req.start_date, "end": req.end_date}
                 )
                 with self._lock:
+                    if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
+                        return
                     job["status"] = DownloadJobStatus.COMPLETED
                     job["progress_pct"] = 100.0
                     job["bytes_downloaded"] = target_file.stat().st_size
@@ -489,48 +500,88 @@ class DownloadManager:
                     job["completed_at"] = datetime.now(timezone.utc).isoformat()
             else:
                 with self._lock:
+                    if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
+                        return
                     job["status"] = DownloadJobStatus.FAILED
                     job["error"] = "Command executed successfully but output file was not found."
                     job["completed_at"] = datetime.now(timezone.utc).isoformat()
 
         except Exception as e:
             with self._lock:
+                if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
+                    return
                 job["status"] = DownloadJobStatus.FAILED
                 job["error"] = str(e)
                 job["completed_at"] = datetime.now(timezone.utc).isoformat()
 
     def get_job_status(self, job_id: str) -> Optional[DownloadJobInfo]:
-        """Retrieves live status of a download job."""
+        """Retrieves live status of a download job with filesystem evidence sampling."""
         with self._lock:
             job = self._jobs.get(job_id)
             if not job:
                 return None
+
+            # Live sampling of disk evidence when job is in a non-terminal state
+            if job["status"] in (DownloadJobStatus.RUNNING, DownloadJobStatus.QUEUED):
+                part_path = Path(job.get("part_file", ""))
+                target_path = Path(job.get("target_file", ""))
+                curr_size = 0
+                if part_path.exists():
+                    try:
+                        curr_size = part_path.stat().st_size
+                    except Exception:
+                        pass
+                elif target_path.exists():
+                    try:
+                        curr_size = target_path.stat().st_size
+                    except Exception:
+                        pass
+
+                if curr_size > 0:
+                    job["bytes_downloaded"] = curr_size
+                    est = job.get("estimated_bytes", 0)
+                    if est > 0:
+                        pct = (curr_size / est) * 100.0
+                        job["progress_pct"] = min(99.0, max(0.0, round(pct, 1)))
+
             info = {k: v for k, v in job.items() if not k.startswith("_")}
             if info.get("manifest"):
                 info["manifest"] = ManifestRecord(**info["manifest"])
             return DownloadJobInfo(**info)
 
     def cancel_job(self, job_id: str) -> bool:
-        """Cancels a running download job."""
+        """Cancels a running or queued download job."""
         with self._lock:
             job = self._jobs.get(job_id)
             if not job:
                 return False
+            # Terminal states are immutable and cannot be cancelled
+            if job["status"] in (DownloadJobStatus.COMPLETED, DownloadJobStatus.FAILED, DownloadJobStatus.CANCELLED):
+                return False
+
             job["_cancelled"] = True
             job["status"] = DownloadJobStatus.CANCELLED
+            job["completed_at"] = datetime.now(timezone.utc).isoformat()
             proc = job.get("_process")
-            if proc:
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
             part_file = Path(job.get("part_file", ""))
-            if part_file.exists():
+
+        if proc:
+            try:
+                proc.terminate()
                 try:
-                    part_file.unlink()
+                    proc.wait(timeout=1.0)
                 except Exception:
-                    pass
-            return True
+                    proc.kill()
+            except Exception:
+                pass
+
+        if part_file.exists():
+            try:
+                part_file.unlink()
+            except Exception:
+                pass
+
+        return True
 
 
 download_manager = DownloadManager()

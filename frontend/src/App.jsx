@@ -35,7 +35,8 @@ import {
 
   fetchMetadata,
   selectActiveDataset,
-  setActiveDatasetId
+  setActiveDatasetId,
+  fetchDownloadStatus
 } from './services/api.js';
 import {
   computeNextStep,
@@ -139,6 +140,43 @@ export default function App() {
   const [isAdminUsersOpen, setIsAdminUsersOpen] = useState(false);
   const [isSensorRegisterOpen, setIsSensorRegisterOpen] = useState(false);
   const [, setCustomSensors] = useState([]);
+
+  // Dataset Download Job & Progress state
+  const [activeDownloadJob, setActiveDownloadJob] = useState(null);
+  const downloadPollGenRef = useRef(0);
+  const activeJobId = activeDownloadJob?.job_id;
+  const activeJobStatus = activeDownloadJob?.status;
+
+  // Background polling for active download job
+  useEffect(() => {
+    if (!activeJobId || !['QUEUED', 'RUNNING'].includes(activeJobStatus)) {
+      return;
+    }
+
+    const currentPollGen = ++downloadPollGenRef.current;
+    const jobId = activeJobId;
+
+    const intervalId = window.setInterval(() => {
+      fetchDownloadStatus(jobId)
+        .then((latest) => {
+          if (downloadPollGenRef.current !== currentPollGen) return;
+          setActiveDownloadJob((prev) => {
+            if (!prev || prev.job_id !== jobId) return prev;
+            if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(prev.status) && ['QUEUED', 'RUNNING'].includes(latest.status)) {
+              return prev;
+            }
+            return latest;
+          });
+        })
+        .catch((err) => {
+          console.warn('Failed to poll download status:', err);
+        });
+    }, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [activeJobId, activeJobStatus]);
   // MoES/INCOIS Operational Authentication & Session state
   const [isLoginOpen, setIsLoginOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState(() => {
@@ -1737,6 +1775,8 @@ export default function App() {
           isTransitioning={isTransitioningDataset}
           isDatasetReady={isDatasetReady}
           currentActiveDatasetId={activeDataset?.dataset_id}
+          activeDownloadJob={activeDownloadJob}
+          setActiveDownloadJob={setActiveDownloadJob}
         />
         <FishermanModeModal
           isOpen={isFishermanModalOpen}

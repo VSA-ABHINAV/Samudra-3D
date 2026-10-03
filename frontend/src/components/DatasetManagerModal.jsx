@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   fetchDatasets,
   selectActiveDataset,
@@ -6,7 +6,9 @@ import {
   registerCustomDataset,
   generateSubsetCommand,
   fetchDatasetManifests,
-  startDatasetDownload
+  startDatasetDownload,
+  fetchDownloadStatus,
+  cancelDatasetDownload
 } from '../services/api';
 
 export default function DatasetManagerModal({
@@ -15,7 +17,9 @@ export default function DatasetManagerModal({
   onDatasetSwitched,
   onSelectDataset,
   isTransitioning = false,
-  currentActiveDatasetId: _currentActiveDatasetId
+  currentActiveDatasetId: _currentActiveDatasetId,
+  activeDownloadJob = null,
+  setActiveDownloadJob = null
 }) {
   const [activeTab, setActiveTab] = useState('catalog'); // 'catalog' | 'downloader' | 'manifests' | 'estimator' | 'custom'
   const [datasets, setDatasets] = useState([]);
@@ -43,7 +47,13 @@ export default function DatasetManagerModal({
   const [generatingCmd, setGeneratingCmd] = useState(false);
   const [copiedCmd, setCopiedCmd] = useState(false);
   const [copiedHash, setCopiedHash] = useState(null);
-  const [_activeDownloadJob, setActiveDownloadJob] = useState(null);
+  const [localActiveDownloadJob, setLocalActiveDownloadJob] = useState(null);
+  const [startingDownload, setStartingDownload] = useState(false);
+  const [cancellingJob, setCancellingJob] = useState(false);
+  const downloadRequestIdRef = useRef(0);
+
+  const activeJob = activeDownloadJob !== undefined && activeDownloadJob !== null ? activeDownloadJob : localActiveDownloadJob;
+  const setJob = setActiveDownloadJob || setLocalActiveDownloadJob;
 
   // Manifests state
   const [manifests, setManifests] = useState([]);
@@ -163,15 +173,52 @@ export default function DatasetManagerModal({
     }
   };
 
+  // Automatically refresh manifests when a download job completes
+  useEffect(() => {
+    if (activeJob?.status === 'COMPLETED') {
+      loadManifests();
+    }
+  }, [activeJob?.status, loadManifests]);
+
   const handleStartDownload = async (forceOverride = false) => {
+    if (startingDownload || (activeJob && ['QUEUED', 'RUNNING'].includes(activeJob.status))) {
+      return;
+    }
+    const currentReqId = ++downloadRequestIdRef.current;
+    setStartingDownload(true);
     setError(null);
     setSuccessMsg(null);
     try {
       const job = await startDatasetDownload(subsetParams, forceOverride);
-      setActiveDownloadJob(job);
+      if (downloadRequestIdRef.current !== currentReqId) return;
+      setJob(job);
       setSuccessMsg(`Download job '${job.job_id}' started!`);
     } catch (err) {
+      if (downloadRequestIdRef.current !== currentReqId) return;
       setError(err.message || 'Failed to start download job');
+    } finally {
+      if (downloadRequestIdRef.current === currentReqId) {
+        setStartingDownload(false);
+      }
+    }
+  };
+
+  const handleCancelDownload = async () => {
+    if (!activeJob?.job_id || cancellingJob) return;
+    setCancellingJob(true);
+    setError(null);
+    try {
+      await cancelDatasetDownload(activeJob.job_id);
+      const latest = await fetchDownloadStatus(activeJob.job_id).catch(() => ({
+        ...activeJob,
+        status: 'CANCELLED'
+      }));
+      setJob(latest);
+      setSuccessMsg(`Download job '${activeJob.job_id}' cancelled.`);
+    } catch (err) {
+      setError(err.message || 'Failed to cancel download job');
+    } finally {
+      setCancellingJob(false);
     }
   };
 
@@ -466,6 +513,183 @@ export default function DatasetManagerModal({
         {/* Tab 2: Safe CLI Subsetter & Controlled Download */}
         {activeTab === 'downloader' && (
           <div className="p-6 overflow-y-auto flex-1 space-y-5">
+            {/* Active / Recent Download Job Card */}
+            {activeJob && (
+              <div
+                className={`p-4 rounded-xl border transition space-y-3 ${
+                  activeJob.status === 'COMPLETED'
+                    ? 'bg-emerald-950/30 border-emerald-700/60'
+                    : activeJob.status === 'FAILED'
+                    ? 'bg-rose-950/30 border-rose-700/60'
+                    : activeJob.status === 'CANCELLED'
+                    ? 'bg-amber-950/30 border-amber-700/60'
+                    : 'bg-sky-950/40 border-sky-600/70 shadow-lg shadow-sky-950/60'
+                }`}
+                data-testid="active-download-job-card"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <span>⚡ Download Job</span>
+                      <code className="font-mono text-sky-300 text-[11px]" data-testid="download-job-id">
+                        {activeJob.job_id}
+                      </code>
+                    </span>
+                    <span
+                      data-testid="download-job-status"
+                      className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded uppercase ${
+                        activeJob.status === 'COMPLETED'
+                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-700'
+                          : activeJob.status === 'FAILED'
+                          ? 'bg-rose-950 text-rose-300 border border-rose-700'
+                          : activeJob.status === 'CANCELLED'
+                          ? 'bg-amber-950 text-amber-300 border border-amber-700'
+                          : 'bg-sky-950 text-sky-300 border border-sky-700 animate-pulse'
+                      }`}
+                    >
+                      {activeJob.status}
+                    </span>
+                    <span className="text-[10px] font-mono text-slate-400 truncate max-w-xs" data-testid="download-job-dataset">
+                      {activeJob.dataset_id}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {['QUEUED', 'RUNNING'].includes(activeJob.status) ? (
+                      <button
+                        type="button"
+                        data-testid="cancel-download-btn"
+                        disabled={cancellingJob}
+                        onClick={handleCancelDownload}
+                        className="px-3 py-1 rounded bg-rose-900/80 hover:bg-rose-800 text-rose-200 border border-rose-700 text-xs font-semibold transition flex items-center gap-1.5 shadow"
+                      >
+                        {cancellingJob ? (
+                          <>
+                            <div className="w-3 h-3 border-2 border-rose-300 border-t-transparent rounded-full animate-spin" />
+                            <span>Cancelling...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>⏹️</span>
+                            <span>Cancel Download</span>
+                          </>
+                        )}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        data-testid="dismiss-download-btn"
+                        onClick={() => setJob(null)}
+                        className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition"
+                      >
+                        Dismiss
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Target file */}
+                {activeJob.target_file && (
+                  <div className="text-[11px] font-mono text-slate-400 truncate" data-testid="download-job-target">
+                    Target: <span className="text-slate-200">{activeJob.target_file}</span>
+                  </div>
+                )}
+
+                {/* Progress bar and details */}
+                <div className="space-y-1.5 pt-1">
+                  <div className="flex items-center justify-between text-xs font-mono">
+                    <span className="text-slate-300 flex items-center gap-1.5">
+                      {['QUEUED', 'RUNNING'].includes(activeJob.status) && (
+                        <span className="inline-block w-2 h-2 rounded-full bg-sky-400 animate-ping" />
+                      )}
+                      <span>Progress:</span>
+                      <strong className="text-white" data-testid="download-progress-pct">
+                        {activeJob.status === 'COMPLETED'
+                          ? '100.0%'
+                          : activeJob.progress_pct > 0
+                          ? `${activeJob.progress_pct.toFixed(1)}%`
+                          : '0.0%'}
+                      </strong>
+                    </span>
+                    <span className="text-slate-400" data-testid="download-byte-stats">
+                      {activeJob.status === 'COMPLETED'
+                        ? `${(activeJob.bytes_downloaded / (1024 * 1024)).toFixed(2)} MB (Complete)`
+                        : activeJob.estimated_bytes > 0
+                        ? `${(activeJob.bytes_downloaded / (1024 * 1024)).toFixed(2)} MB / ${(activeJob.estimated_bytes / (1024 * 1024)).toFixed(2)} MB`
+                        : `${(activeJob.bytes_downloaded / (1024 * 1024)).toFixed(2)} MB`}
+                    </span>
+                  </div>
+
+                  <div className="w-full bg-slate-950 rounded-full h-2.5 overflow-hidden border border-slate-800 p-0.5">
+                    {['QUEUED', 'RUNNING'].includes(activeJob.status) && activeJob.progress_pct === 0 && activeJob.bytes_downloaded === 0 ? (
+                      <div
+                        className="bg-sky-500 h-full rounded-full animate-pulse w-full"
+                        data-testid="download-progress-indeterminate"
+                      />
+                    ) : (
+                      <div
+                        role="progressbar"
+                        aria-valuenow={activeJob.status === 'COMPLETED' ? 100 : activeJob.progress_pct}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        data-testid="download-progress-bar"
+                        className={`h-full rounded-full transition-all duration-300 ${
+                          activeJob.status === 'COMPLETED'
+                            ? 'bg-emerald-500'
+                            : activeJob.status === 'FAILED'
+                            ? 'bg-rose-500'
+                            : activeJob.status === 'CANCELLED'
+                            ? 'bg-amber-500'
+                            : 'bg-sky-500'
+                        }`}
+                        style={{
+                          width: `${activeJob.status === 'COMPLETED' ? 100 : Math.max(2, activeJob.progress_pct)}%`
+                        }}
+                      />
+                    )}
+                  </div>
+                </div>
+
+                {/* State specific banners */}
+                {activeJob.status === 'COMPLETED' && (
+                  <div
+                    data-testid="download-job-completed"
+                    className="p-2.5 rounded bg-emerald-950/60 border border-emerald-800/80 text-emerald-200 text-xs flex flex-col gap-1 font-mono"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>✓</span>
+                      <span>Download completed successfully. Verified SHA-256 manifest created.</span>
+                    </div>
+                    {activeJob.manifest_file && (
+                      <div className="text-[11px] text-emerald-300/90 pl-5" data-testid="download-manifest-record">
+                        Manifest: <span className="font-semibold text-white">{activeJob.manifest_file}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {activeJob.status === 'FAILED' && activeJob.error && (
+                  <div
+                    data-testid="download-job-error"
+                    className="p-2.5 rounded bg-rose-950/60 border border-rose-800/80 text-rose-200 text-xs flex items-center gap-2 font-mono"
+                  >
+                    <span>⚠️</span>
+                    <span>Error: {activeJob.error}</span>
+                  </div>
+                )}
+
+                {activeJob.status === 'CANCELLED' && (
+                  <div
+                    data-testid="download-job-cancelled"
+                    className="p-2.5 rounded bg-amber-950/60 border border-amber-800/80 text-amber-200 text-xs flex items-center gap-2 font-mono"
+                  >
+                    <span>⏹️</span>
+                    <span>Download was cancelled. Temporary .part files were removed.</span>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="p-4 rounded-xl bg-slate-800/40 border border-slate-700/60 space-y-3">
               <div className="flex items-center justify-between">
                 <div>
@@ -640,18 +864,54 @@ export default function DatasetManagerModal({
                   {cmdResponse.can_execute_automatically ? (
                     <button
                       type="button"
+                      data-testid="start-download-btn"
+                      disabled={startingDownload || (activeJob && ['QUEUED', 'RUNNING'].includes(activeJob.status))}
                       onClick={() => handleStartDownload(false)}
-                      className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shrink-0 shadow"
+                      className={`px-4 py-2 rounded-lg text-white font-bold text-xs shrink-0 shadow transition flex items-center gap-1.5 ${
+                        startingDownload || (activeJob && ['QUEUED', 'RUNNING'].includes(activeJob.status))
+                          ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
+                          : 'bg-emerald-600 hover:bg-emerald-500'
+                      }`}
+                      title={
+                        activeJob && ['QUEUED', 'RUNNING'].includes(activeJob.status)
+                          ? 'A download job is currently running'
+                          : 'Start safe download'
+                      }
                     >
-                      🚀 Run Safe Download
+                      {startingDownload ? (
+                        <>
+                          <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          <span>Starting...</span>
+                        </>
+                      ) : (
+                        <span>🚀 Run Safe Download</span>
+                      )}
                     </button>
                   ) : (
                     <button
                       type="button"
+                      data-testid="start-download-btn"
+                      disabled={startingDownload || (activeJob && ['QUEUED', 'RUNNING'].includes(activeJob.status))}
                       onClick={() => handleStartDownload(true)}
-                      className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shrink-0 shadow"
+                      className={`px-4 py-2 rounded-lg text-white font-bold text-xs shrink-0 shadow transition flex items-center gap-1.5 ${
+                        startingDownload || (activeJob && ['QUEUED', 'RUNNING'].includes(activeJob.status))
+                          ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
+                          : 'bg-amber-600 hover:bg-amber-500'
+                      }`}
+                      title={
+                        activeJob && ['QUEUED', 'RUNNING'].includes(activeJob.status)
+                          ? 'A download job is currently running'
+                          : 'Confirm and start download'
+                      }
                     >
-                      ⚠️ Explicit Confirm & Run
+                      {startingDownload ? (
+                        <>
+                          <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          <span>Starting...</span>
+                        </>
+                      ) : (
+                        <span>⚠️ Explicit Confirm & Run</span>
+                      )}
                     </button>
                   )}
                 </div>
