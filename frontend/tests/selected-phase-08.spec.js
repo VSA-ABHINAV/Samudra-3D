@@ -97,7 +97,11 @@ const MOCK_ARGO_REAL = {
   source_mode: 'REAL_LOCAL'
 };
 
-async function setupStandardRoutes(page, { activeDataset = DATASET_SYNTHETIC, metadata = METADATA_SYNTHETIC } = {}) {
+async function setupStandardRoutes(page, {
+  activeDataset = DATASET_SYNTHETIC,
+  metadata = METADATA_SYNTHETIC,
+  onArgoDetailRoute = null
+} = {}) {
   const probeRequests = [];
   const argoRequests = [];
 
@@ -180,6 +184,11 @@ async function setupStandardRoutes(page, { activeDataset = DATASET_SYNTHETIC, me
       const pathParts = pathname.split('/');
       const rawId = decodeURIComponent(pathParts[pathParts.length - 1]);
       argoRequests.push(rawId);
+
+      if (onArgoDetailRoute) {
+        const handled = await onArgoDetailRoute(route, rawId);
+        if (handled) return;
+      }
 
       const upperId = rawId.toUpperCase();
       if (upperId === 'ARGO_2902145' || upperId === '2902145') {
@@ -348,104 +357,54 @@ test.describe('Selected Phase 08: Argo Observation-ID Search & Platform Selectio
   });
 
   test('TC-P08-04: Stale query invalidation prevents held prior lookup from overwriting newer query', async ({ page }) => {
-    let delayFirst = true;
+    let releaseFirstRequest;
+    const firstRequestPromise = new Promise((resolve) => {
+      releaseFirstRequest = resolve;
+    });
+    let firstRequestStarted = false;
 
-    await Promise.all([
-      page.route('**/api/datasets', async (route) => {
-        await route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({ active_dataset_id: DATASET_SYNTHETIC.dataset_id, datasets: [DATASET_SYNTHETIC] })
-        });
-      }),
-      page.route('**/api/metadata', async (route) => {
-        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(METADATA_SYNTHETIC) });
-      }),
-      page.route('**/api/ocean-data*', async (route) => {
-        await route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({
-            dataset_id: DATASET_SYNTHETIC.dataset_id,
-            variable: 'temperature',
-            requested_depth: 0,
-            selected_depth: 0.0,
-            timestamp: '2026-09-10T00:00:00Z',
-            lats: [10, 11],
-            lons: [75, 76],
-            values: [[28.5, 28.6], [28.4, 28.5]]
-          })
-        });
-      }),
-      page.route('**/api/ocean/probe*', async (route) => {
-        const url = new URL(route.request().url());
-        const lat = parseFloat(url.searchParams.get('lat'));
-        const lon = parseFloat(url.searchParams.get('lon'));
-        await route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify({
-            lat,
-            lon,
-            timestamp: '2026-09-10T00:00:00Z',
-            time_idx: 0,
-            depths: [0, 10, 50],
-            temperature: [28.5, 28.2, 24.5],
-            salinity: [34.5, 34.6, 35.0]
-          })
-        });
-      }),
-      page.route('**/api/insitu/argo/*', async (route) => {
-        const url = new URL(route.request().url());
-        const pathParts = url.pathname.split('/');
-        const rawId = decodeURIComponent(pathParts[pathParts.length - 1]).toUpperCase();
-
-        if (rawId.includes('2902145') && delayFirst) {
-          // Delay first request by 400ms to simulate slow response
-          await new Promise((r) => setTimeout(r, 400));
-          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_ARGO_BOB) });
-        } else if (rawId.includes('2902198')) {
-          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_ARGO_AS) });
-        } else {
-          await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ detail: 'not found' }) });
+    await setupStandardRoutes(page, {
+      onArgoDetailRoute: async (route, rawId) => {
+        if (rawId.includes('2902145')) {
+          firstRequestStarted = true;
+          await firstRequestPromise;
+          try {
+            await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_ARGO_BOB) });
+          } catch {
+            // Handled if aborted
+          }
+          return true;
         }
-      }),
-      page.route('**/api/insitu/argo', async (route) => {
-        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([MOCK_ARGO_BOB, MOCK_ARGO_AS]) });
-      }),
-      page.route('**/api/insitu/gliders*', async (route) => {
-        await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
-      }),
-      page.route('**/api/insitu/sensors*', async (route) => {
-        await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
-      })
-    ]);
+        return false;
+      }
+    });
 
     await page.goto('/');
     await waitForDatasetReady(page);
 
     const searchInput = page.locator('[data-testid="global-search-input"]');
 
-    // Type 2902145 (which is delayed)
+    // Type 2902145 (which will be held by route handler)
     await searchInput.fill('2902145');
+    await expect.poll(() => firstRequestStarted).toBe(true);
 
-    // Rapidly switch query to 2902198 (which resolves quickly)
+    // Switch query to 2902198 (which resolves immediately)
     await searchInput.fill('2902198');
 
     const argoResult = page.locator('[data-testid="argo-search-result"]');
     await expect(argoResult).toBeVisible({ timeout: 5000 });
     await expect(argoResult).toContainText('Argo Float 2902198 (Arabian Sea)');
 
-    // Wait 500ms to ensure the delayed response from 2902145 has arrived
-    await page.waitForTimeout(500);
+    // Release the first held request (2902145)
+    releaseFirstRequest();
 
-    // Verify the result was NOT overwritten with 2902145
+    // Verify the result stays as 2902198 and was NOT replaced by the stale 2902145
     await expect(argoResult).toContainText('Argo Float 2902198 (Arabian Sea)');
     await expect(argoResult).not.toContainText('2902145');
   });
 
-  test('TC-P08-05: Coordinate and place-name search regressions remain intact', async ({ page }) => {
-    const { probeRequests } = await setupStandardRoutes(page);
+  test('TC-P08-05: Coordinate, place-name search regressions remain intact and non-WMO queries are ignored', async ({ page }) => {
+    const { probeRequests, argoRequests } = await setupStandardRoutes(page);
     await page.goto('/');
     await waitForDatasetReady(page);
 
@@ -471,10 +430,31 @@ test.describe('Selected Phase 08: Argo Observation-ID Search & Platform Selectio
     await placeItem.click();
     await expect(page.locator('[data-testid="search-results-dropdown"]')).not.toBeVisible();
 
-    // 3. Short non-WMO query does not trigger Argo search
+    // 3. Arbitrary non-WMO query tokens (short text, 4 digits, 8 digits, non-numeric suffixes) do not trigger Argo search
     await searchInput.fill('ab');
     await expect(page.locator('[data-testid="argo-search-loading"]')).not.toBeVisible();
     await expect(page.locator('[data-testid="argo-search-result"]')).not.toBeVisible();
+
+    await searchInput.fill('1234'); // 4 digits (out of 5-7 WMO scope)
+    await expect(page.locator('[data-testid="argo-search-loading"]')).not.toBeVisible();
+    await expect(page.locator('[data-testid="argo-search-result"]')).not.toBeVisible();
+
+    await searchInput.fill('12345678'); // 8 digits (out of 5-7 WMO scope)
+    await expect(page.locator('[data-testid="argo-search-loading"]')).not.toBeVisible();
+    await expect(page.locator('[data-testid="argo-search-result"]')).not.toBeVisible();
+
+    await searchInput.fill('ARGO_TEST_QC_OUTLIER'); // Arbitrary non-numeric token
+    await expect(page.locator('[data-testid="argo-search-loading"]')).not.toBeVisible();
+    await expect(page.locator('[data-testid="argo-search-result"]')).not.toBeVisible();
+
+    await searchInput.fill('GLIDER_01'); // Non-Argo string
+    await expect(page.locator('[data-testid="argo-search-loading"]')).not.toBeVisible();
+    await expect(page.locator('[data-testid="argo-search-result"]')).not.toBeVisible();
+
+    // Verify no Argo network lookups were dispatched for these invalid tokens
+    const invalidTokens = ['ab', '1234', '12345678', 'ARGO_TEST_QC_OUTLIER', 'GLIDER_01'];
+    const matchingLookups = argoRequests.filter((id) => invalidTokens.some((tok) => id.toUpperCase().includes(tok.toUpperCase())));
+    expect(matchingLookups).toEqual([]);
   });
 
   test('TC-P08-06: Keyboard Enter selects Argo result and Escape dismisses suggestions', async ({ page }) => {
@@ -504,5 +484,124 @@ test.describe('Selected Phase 08: Argo Observation-ID Search & Platform Selectio
 
     await searchInput.press('Escape');
     await expect(page.locator('[data-testid="search-results-dropdown"]')).not.toBeVisible();
+  });
+
+  test('TC-P08-07: Escape dismisses pending in-flight search and late response never renders', async ({ page }) => {
+    let releaseHeldRequest;
+    const heldRequestPromise = new Promise((resolve) => {
+      releaseHeldRequest = resolve;
+    });
+    let heldRequestStarted = false;
+    let requestSettled = false;
+
+    await setupStandardRoutes(page, {
+      onArgoDetailRoute: async (route, rawId) => {
+        if (rawId.includes('2902145')) {
+          heldRequestStarted = true;
+          await heldRequestPromise;
+          try {
+            await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(MOCK_ARGO_BOB) });
+          } catch {
+            // Handled if aborted
+          }
+          requestSettled = true;
+          return true;
+        }
+        return false;
+      }
+    });
+
+    await page.goto('/');
+    await waitForDatasetReady(page);
+
+    const searchInput = page.locator('[data-testid="global-search-input"]');
+    await searchInput.fill('2902145');
+
+    // Wait until in-flight request has started and loading state appears
+    await expect.poll(() => heldRequestStarted).toBe(true);
+    await expect(page.locator('[data-testid="argo-search-loading"]')).toBeVisible();
+
+    // Press Escape to dismiss dropdown and cancel search
+    await searchInput.press('Escape');
+
+    // Dropdown and loading indicator must immediately be hidden
+    await expect(page.locator('[data-testid="search-results-dropdown"]')).not.toBeVisible();
+    await expect(page.locator('[data-testid="argo-search-loading"]')).not.toBeVisible();
+
+    // Release the held network response
+    releaseHeldRequest();
+    await expect.poll(() => requestSettled).toBe(true);
+
+    // Dropdown must remain closed and no search result should appear
+    await expect(page.locator('[data-testid="search-results-dropdown"]')).not.toBeVisible();
+    await expect(page.locator('[data-testid="argo-search-result"]')).not.toBeVisible();
+  });
+
+  test('TC-P08-08: Rejects non-Argo platform payload or invalid/out-of-bounds coordinates and recovers on valid query', async ({ page }) => {
+    let mode = 'non_argo'; // 'non_argo' | 'invalid_coords' | 'valid'
+
+    await setupStandardRoutes(page, {
+      onArgoDetailRoute: async (route, rawId) => {
+        if (rawId.includes('5901234')) {
+          if (mode === 'non_argo') {
+            await route.fulfill({
+              status: 200,
+              contentType: 'application/json',
+              body: JSON.stringify({
+                id: 'GLIDER_5901234',
+                platform_type: 'glider',
+                name: 'Autonomous Glider 5901234',
+                lat: 12.0,
+                lon: 80.0
+              })
+            });
+            return true;
+          }
+          if (mode === 'invalid_coords') {
+            await route.fulfill({
+              status: 200,
+              contentType: 'application/json',
+              body: JSON.stringify({
+                id: 'ARGO_5901234',
+                platform_type: 'argo',
+                name: 'Malformed Argo 5901234',
+                lat: 999.0, // Out of bounds
+                lon: null
+              })
+            });
+            return true;
+          }
+        }
+        return false;
+      }
+    });
+
+    await page.goto('/');
+    await waitForDatasetReady(page);
+
+    const searchInput = page.locator('[data-testid="global-search-input"]');
+    const notFoundMsg = page.locator('[data-testid="argo-search-not-found"]');
+    const argoResult = page.locator('[data-testid="argo-search-result"]');
+
+    // 1. Non-argo platform type payload is rejected
+    mode = 'non_argo';
+    await searchInput.fill('5901234');
+    await expect(notFoundMsg).toBeVisible({ timeout: 5000 });
+    await expect(notFoundMsg).toContainText('No Argo platform found for ID "5901234"');
+    await expect(argoResult).not.toBeVisible();
+
+    // 2. Invalid coordinates payload is rejected
+    mode = 'invalid_coords';
+    await searchInput.fill('ARGO_5901234');
+    await expect(notFoundMsg).toBeVisible({ timeout: 5000 });
+    await expect(notFoundMsg).toContainText('No Argo platform found for ID "ARGO_5901234"');
+    await expect(argoResult).not.toBeVisible();
+
+    // 3. Valid query recovers properly
+    mode = 'valid';
+    await searchInput.fill('2902145');
+    await expect(notFoundMsg).not.toBeVisible();
+    await expect(argoResult).toBeVisible({ timeout: 5000 });
+    await expect(argoResult).toContainText('Argo Float 2902145 (Bay of Bengal)');
   });
 });

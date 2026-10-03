@@ -5,41 +5,39 @@ import { fetchArgoFloatById } from '../services/api.js';
 
 /**
  * Normalizes and extracts Argo WMO identifier candidates.
- * Supports: "2902145", "ARGO_2902145", "argo_2902145", "Argo 2902145", "argo-2902145", "ARGO_2902210_REAL", "ARGO_TEST_QC_OUTLIER"
+ * Strictly matches 5-7 digit numeric WMO IDs with optional 'ARGO', '_', '-', or space prefix (case-insensitive).
+ * Rejects arbitrary strings (e.g., 'ARGO_TEST_QC_OUTLIER', 'GLIDER_01', '1234', '12345678').
  */
 export function parseArgoQuery(query) {
   if (!query || typeof query !== 'string') return null;
   const trimmed = query.trim();
   if (!trimmed) return null;
 
-  // Case 1: Prefixed with ARGO_ or ARGO- or ARGO (case-insensitive)
-  const argoPrefixMatch = trimmed.match(/^argo[_\s-]?([a-z0-9_-]+)$/i);
-  if (argoPrefixMatch) {
-    const rawRest = argoPrefixMatch[1].trim();
-    const normalized = `ARGO_${rawRest.toUpperCase()}`;
-    return {
-      raw: trimmed,
-      lookupId: normalized,
-      fallbackId: rawRest,
-      displayId: normalized,
-      isArgoPattern: true
-    };
-  }
+  const match = trimmed.match(/^(?:argo[_\s-]?)?(\d{5,7})$/i);
+  if (!match) return null;
 
-  // Case 2: Pure 5 to 7 digit numeric WMO identifier (e.g. "2902145", "2902198", "2902210")
-  const wmoDigitsMatch = trimmed.match(/^(\d{5,7})$/);
-  if (wmoDigitsMatch) {
-    const digits = wmoDigitsMatch[1];
-    return {
-      raw: trimmed,
-      lookupId: `ARGO_${digits}`,
-      fallbackId: digits,
-      displayId: `ARGO_${digits}`,
-      isArgoPattern: true
-    };
-  }
+  const digits = match[1];
+  return {
+    raw: trimmed,
+    digits,
+    lookupId: `ARGO_${digits}`,
+    fallbackId: digits,
+    displayId: `ARGO_${digits}`,
+    isArgoPattern: true
+  };
+}
 
-  return null;
+/**
+ * Validates that an API response is an authentic, well-formed Argo float detail record.
+ * Must have platform_type === 'argo', valid non-empty string ID, and finite lat/lon within bounds.
+ */
+export function isValidArgoDetail(detail) {
+  if (!detail || typeof detail !== 'object') return false;
+  if (detail.platform_type !== 'argo') return false;
+  if (typeof detail.id !== 'string' || !detail.id.trim()) return false;
+  if (typeof detail.lat !== 'number' || !Number.isFinite(detail.lat) || detail.lat < -90 || detail.lat > 90) return false;
+  if (typeof detail.lon !== 'number' || !Number.isFinite(detail.lon) || detail.lon < -180 || detail.lon > 180) return false;
+  return true;
 }
 
 /**
@@ -156,7 +154,7 @@ export default function Header({
       }
     }
 
-    // 3. Check if query matches supported Argo WMO ID format
+    // 3. Check if query matches supported Argo WMO ID format (5-7 digits)
     const argoCandidate = parseArgoQuery(val);
 
     if (!argoCandidate) {
@@ -177,10 +175,10 @@ export default function Header({
     fetchArgoFloatById(argoCandidate.lookupId, controller.signal)
       .then((detail) => {
         if (searchRequestIdRef.current !== currentReqId) return;
-        if (detail && (detail.platform_type === 'argo' || detail.id)) {
+        if (isValidArgoDetail(detail)) {
           const argoItem = {
-            id: detail.id,
-            name: detail.name || `Argo Float ${detail.wmo_id || detail.id}`,
+            id: detail.id.trim(),
+            name: (typeof detail.name === 'string' && detail.name.trim()) ? detail.name.trim() : `Argo Float ${detail.wmo_id || detail.id}`,
             wmo_id: detail.wmo_id || detail.metadata?.wmo_id,
             lat: detail.lat,
             lon: detail.lon,
@@ -192,6 +190,38 @@ export default function Header({
           setIsSearchingArgo(false);
           setArgoSearchStatus({ type: 'success', message: `Found Argo platform ${detail.id}` });
         } else {
+          // If normalized ID lookup failed validation, attempt fallback ID if available
+          if (argoCandidate.fallbackId && argoCandidate.fallbackId !== argoCandidate.lookupId) {
+            fetchArgoFloatById(argoCandidate.fallbackId, controller.signal)
+              .then((fbDetail) => {
+                if (searchRequestIdRef.current !== currentReqId) return;
+                if (isValidArgoDetail(fbDetail)) {
+                  const argoItem = {
+                    id: fbDetail.id.trim(),
+                    name: (typeof fbDetail.name === 'string' && fbDetail.name.trim()) ? fbDetail.name.trim() : `Argo Float ${fbDetail.wmo_id || fbDetail.id}`,
+                    wmo_id: fbDetail.wmo_id || fbDetail.metadata?.wmo_id,
+                    lat: fbDetail.lat,
+                    lon: fbDetail.lon,
+                    dist: 120,
+                    type: 'argo',
+                    floatDetail: fbDetail
+                  };
+                  setSearchResults([argoItem, ...staticResults].slice(0, 6));
+                  setIsSearchingArgo(false);
+                  setArgoSearchStatus({ type: 'success', message: `Found Argo platform ${fbDetail.id}` });
+                  return;
+                }
+                setIsSearchingArgo(false);
+                setArgoSearchStatus({ type: 'not_found', message: `No Argo platform found for ID "${val.trim()}"` });
+              })
+              .catch((fbErr) => {
+                if (fbErr.name === 'AbortError') return;
+                if (searchRequestIdRef.current !== currentReqId) return;
+                setIsSearchingArgo(false);
+                setArgoSearchStatus({ type: 'not_found', message: `No Argo platform found for ID "${val.trim()}"` });
+              });
+            return;
+          }
           setIsSearchingArgo(false);
           setArgoSearchStatus({ type: 'not_found', message: `No Argo platform found for ID "${val.trim()}"` });
         }
@@ -205,10 +235,10 @@ export default function Header({
           fetchArgoFloatById(argoCandidate.fallbackId, controller.signal)
             .then((fbDetail) => {
               if (searchRequestIdRef.current !== currentReqId) return;
-              if (fbDetail && (fbDetail.platform_type === 'argo' || fbDetail.id)) {
+              if (isValidArgoDetail(fbDetail)) {
                 const argoItem = {
-                  id: fbDetail.id,
-                  name: fbDetail.name || `Argo Float ${fbDetail.wmo_id || fbDetail.id}`,
+                  id: fbDetail.id.trim(),
+                  name: (typeof fbDetail.name === 'string' && fbDetail.name.trim()) ? fbDetail.name.trim() : `Argo Float ${fbDetail.wmo_id || fbDetail.id}`,
                   wmo_id: fbDetail.wmo_id || fbDetail.metadata?.wmo_id,
                   lat: fbDetail.lat,
                   lon: fbDetail.lon,
@@ -291,6 +321,11 @@ export default function Header({
             onKeyDown={(e) => {
               if (e.key === 'Escape') {
                 e.preventDefault();
+                if (searchAbortControllerRef.current) {
+                  searchAbortControllerRef.current.abort();
+                  searchAbortControllerRef.current = null;
+                }
+                searchRequestIdRef.current++;
                 setSearchResults([]);
                 setArgoSearchStatus(null);
                 setIsSearchingArgo(false);
