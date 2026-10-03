@@ -4,7 +4,7 @@
 
 Date: October 3, 2026
 Branch: `release/reviewed-core-2026-09-29`
-Commit: `3cf4e1a361733eb8460bbffabe96f9ffdf76114b` (`3cf4e1a`)
+Commit: `798ddc29a8a7ca20ea7163c4c2317be6784d1bc9` (`798ddc2`)
 Scope: Argo Observation-ID Search & Platform Selection (Importance 3/5)
 
 ---
