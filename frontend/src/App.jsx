@@ -145,6 +145,7 @@ export default function App() {
   const [activeDownloadJob, setActiveDownloadJob] = useState(null);
   const downloadPollGenRef = useRef(0);
   const downloadPollSeqRef = useRef(0);
+  const downloadPollAppliedSeqRef = useRef(0);
   const activeJobId = activeDownloadJob?.job_id;
   const activeJobStatus = activeDownloadJob?.status;
 
@@ -155,6 +156,8 @@ export default function App() {
     }
 
     const currentPollGen = ++downloadPollGenRef.current;
+    downloadPollSeqRef.current = 0;
+    downloadPollAppliedSeqRef.current = 0;
     const jobId = activeJobId;
 
     const intervalId = window.setInterval(() => {
@@ -162,10 +165,11 @@ export default function App() {
       fetchDownloadStatus(jobId)
         .then((latest) => {
           if (downloadPollGenRef.current !== currentPollGen) return;
-          if (pollSeq < downloadPollSeqRef.current) {
+          if (pollSeq <= downloadPollAppliedSeqRef.current) {
             // Out of order stale poll response arriving late; discard
             return;
           }
+          downloadPollAppliedSeqRef.current = pollSeq;
           setActiveDownloadJob((prev) => {
             if (!prev || prev.job_id !== jobId) return prev;
             // Terminal states are strictly immutable and cannot be overwritten by non-terminal status

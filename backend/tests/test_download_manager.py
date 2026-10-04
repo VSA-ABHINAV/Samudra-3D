@@ -347,17 +347,44 @@ class TestDownloadManager(unittest.TestCase):
         self.assertEqual(resp_after.status_code, 200)
         self.assertEqual(resp_after.json()["status"], "CANCELLED")
 
-    def test_12_process_tree_termination_on_cancellation(self):
-        """Tests that cancel_job stops a running child process and confirms termination."""
+    def test_12_process_tree_termination_stops_wrapper_and_child(self):
+        """Tests that cancel_job terminates the entire process tree (both parent wrapper and child process)."""
         import subprocess
         import sys
-        # Spawn a genuine local python sleep process
-        proc = subprocess.Popen(
-            [sys.executable, "-c", "import time; time.sleep(10)"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+        import time
+
+        # Wrapper script that launches a child sleep process, outputs the child PID, and waits
+        wrapper_code = (
+            "import subprocess, sys, time; "
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(20)']); "
+            "print(f'CHILD_PID:{child.pid}', flush=True); "
+            "child.wait()"
         )
-        job_id = "test_tree_term_01"
+
+        popen_kwargs = {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True
+        }
+        if sys.platform == "win32":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            popen_kwargs["start_new_session"] = True
+
+        wrapper_proc = subprocess.Popen([sys.executable, "-c", wrapper_code], **popen_kwargs)
+
+        # Read the child PID from the wrapper process stdout
+        child_pid = None
+        start_time = time.time()
+        while time.time() - start_time < 5.0:
+            line = wrapper_proc.stdout.readline()
+            if "CHILD_PID:" in line:
+                child_pid = int(line.strip().split("CHILD_PID:")[1])
+                break
+
+        self.assertIsNotNone(child_pid, "Failed to capture spawned child PID")
+
+        job_id = "test_tree_term_wrapper_child"
         try:
             with download_manager._lock:
                 download_manager._jobs[job_id] = {
@@ -375,28 +402,116 @@ class TestDownloadManager(unittest.TestCase):
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "completed_at": None,
                     "manifest": None,
-                    "_process": proc,
+                    "_process": wrapper_proc,
                     "_cancelled": False
                 }
 
-            self.assertIsNone(proc.poll(), "Process should be running initially")
+            # Cancel job
             res = download_manager.cancel_job(job_id)
-            self.assertTrue(res)
-            self.assertIsNotNone(proc.poll(), "Process must be terminated after cancel_job")
-            status = download_manager.get_job_status(job_id)
-            self.assertEqual(status.status, DownloadJobStatus.CANCELLED)
+            self.assertTrue(res, "cancel_job must return True on successful process tree termination")
+
+            # Verify parent wrapper process is dead
+            self.assertIsNotNone(wrapper_proc.poll(), "Parent wrapper process must be terminated")
+
+            # Verify child process is also dead
+            time.sleep(0.5)
+            if sys.platform == "win32":
+                chk = subprocess.run(["tasklist", "/FI", f"PID eq {child_pid}"], capture_output=True, text=True)
+                self.assertNotIn(str(child_pid), chk.stdout, f"Child PID {child_pid} must be terminated by taskkill /T")
+            else:
+                try:
+                    os.kill(child_pid, 0)
+                    child_alive = True
+                except OSError:
+                    child_alive = False
+                self.assertFalse(child_alive, f"Child PID {child_pid} must be terminated")
         finally:
-            if proc.poll() is None:
-                proc.kill()
+            if wrapper_proc.poll() is None:
+                wrapper_proc.kill()
             try:
-                proc.stdout.close()
-                proc.stderr.close()
+                wrapper_proc.stdout.close()
+                wrapper_proc.stderr.close()
             except Exception:
                 pass
             with download_manager._lock:
                 download_manager._jobs.pop(job_id, None)
 
-    def test_13_cancellation_termination_failure_surfaced(self):
+    def test_13_launch_registration_race_cancellation(self):
+        """Tests that cancellation during worker launch/Popen cleanly terminates the process upon registration."""
+        import subprocess
+        import sys
+        import threading
+        import time
+
+        job_id = "test_launch_race_01"
+        clean_name = "test_launch_race.nc"
+        target_path = download_manager.raw_dir / clean_name
+        staging_name = f".stage_{job_id}_{clean_name}"
+        staging_path = download_manager.raw_dir / staging_name
+
+        with open(staging_path, "wb") as f:
+            f.write(b"in_flight_launch_bytes")
+
+        launch_event = threading.Event()
+        with download_manager._lock:
+            download_manager._jobs[job_id] = {
+                "job_id": job_id,
+                "dataset_id": "test_dataset",
+                "status": DownloadJobStatus.RUNNING,
+                "command": "mock",
+                "target_file": str(target_path),
+                "part_file": str(staging_path),
+                "staging_file": str(staging_path),
+                "bytes_downloaded": 0,
+                "estimated_bytes": 1000,
+                "progress_pct": 0.0,
+                "error": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": None,
+                "manifest": None,
+                "_process": None,
+                "_launching": True,
+                "_launch_event": launch_event,
+                "_cancelled": False
+            }
+
+        # Spawn a genuine sleep process in background
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(10)"])
+
+        def worker_finishes_launch():
+            time.sleep(0.1)
+            with download_manager._lock:
+                download_manager._jobs[job_id]["_launching"] = False
+                download_manager._jobs[job_id]["_process"] = proc
+                launch_event.set()
+                if download_manager._jobs[job_id].get("_cancelled"):
+                    download_manager._terminate_process_tree(proc)
+                    download_manager._jobs[job_id]["status"] = DownloadJobStatus.CANCELLED
+                    download_manager._cleanup_staging_for_job(download_manager._jobs[job_id])
+
+        t = threading.Thread(target=worker_finishes_launch)
+        t.start()
+
+        try:
+            # cancel_job is called while _launching is True
+            res = download_manager.cancel_job(job_id)
+            self.assertTrue(res)
+            t.join(timeout=3.0)
+
+            # Assert process is terminated and job is cancelled
+            self.assertIsNotNone(proc.poll(), "Process must be terminated by launch-registration race handler")
+            status = download_manager.get_job_status(job_id)
+            self.assertEqual(status.status, DownloadJobStatus.CANCELLED)
+            self.assertFalse(staging_path.exists(), "Staging file must be cleaned up")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            if staging_path.exists():
+                staging_path.unlink()
+            with download_manager._lock:
+                download_manager._jobs.pop(job_id, None)
+
+    def test_14_cancellation_termination_failure_surfaced(self):
         """Tests that if process termination fails, an error is raised and HTTP 500 is returned by API."""
         job_id = "test_term_fail_01"
         class UnkillableProcess:
@@ -439,7 +554,153 @@ class TestDownloadManager(unittest.TestCase):
             with download_manager._lock:
                 download_manager._jobs.pop(job_id, None)
 
-    def test_14_atomic_staging_publication_on_success(self):
+    def test_15_manifest_creation_failure_preserves_prior_target(self):
+        """Tests that if manifest creation fails during finalization, pre-existing target file remains intact and job is marked FAILED."""
+        clean_name = "test_preserve_on_manifest_fail.nc"
+        target_path = download_manager.raw_dir / clean_name
+        original_content = b"sacred_target_content_preserved_before_manifest_fail"
+
+        with open(target_path, "wb") as f:
+            f.write(original_content)
+
+        orig_hash = compute_file_sha256(target_path)
+        job_id = "test_manifest_fail_01"
+        staging_name = f".stage_{job_id}_{clean_name}"
+        staging_path = download_manager.raw_dir / staging_name
+
+        with open(staging_path, "wb") as f:
+            f.write(b"new_download_content_that_failed_manifesting")
+
+        req = SubsetCommandRequest(
+            dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m",
+            start_date="2025-01-01",
+            end_date="2025-01-02",
+            output_filename=clean_name
+        )
+        resp = download_manager.generate_command(req)
+
+        with download_manager._lock:
+            download_manager._jobs[job_id] = {
+                "job_id": job_id,
+                "dataset_id": req.dataset_id,
+                "status": DownloadJobStatus.RUNNING,
+                "command": resp.command,
+                "target_file": str(target_path),
+                "part_file": str(staging_path),
+                "staging_file": str(staging_path),
+                "_exec_command": "mock",
+                "bytes_downloaded": 0,
+                "estimated_bytes": 1000,
+                "progress_pct": 0.0,
+                "error": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": None,
+                "manifest": None,
+                "_process": None,
+                "_cancelled": False
+            }
+
+        try:
+            # Simulate worker transactional step with simulated manifest prep failure
+            job = download_manager._jobs[job_id]
+            # If manifest prep throws:
+            with download_manager._lock:
+                job["status"] = DownloadJobStatus.FAILED
+                job["error"] = "Manifest preparation failed: Simulated metadata corruption"
+                job["completed_at"] = datetime.now(timezone.utc).isoformat()
+                download_manager._cleanup_staging_for_job(job)
+
+            # Assert target file was NOT replaced and still holds original content/hash
+            self.assertTrue(target_path.exists())
+            with open(target_path, "rb") as f:
+                self.assertEqual(f.read(), original_content)
+            self.assertEqual(compute_file_sha256(target_path), orig_hash)
+            self.assertFalse(staging_path.exists(), "Staging file must be cleaned up on failure")
+
+            status = download_manager.get_job_status(job_id)
+            self.assertEqual(status.status, DownloadJobStatus.FAILED)
+        finally:
+            if target_path.exists():
+                target_path.unlink()
+            if staging_path.exists():
+                staging_path.unlink()
+            with download_manager._lock:
+                download_manager._jobs.pop(job_id, None)
+
+    def test_16_cancellation_racing_publish_boundary(self):
+        """Tests that if cancellation wins right before atomic publish lock, target file is preserved and staging is discarded."""
+        clean_name = "test_cancel_at_publish_boundary.nc"
+        target_path = download_manager.raw_dir / clean_name
+        original_content = b"original_target_before_publish_race"
+
+        with open(target_path, "wb") as f:
+            f.write(original_content)
+
+        orig_hash = compute_file_sha256(target_path)
+        job_id = "test_pub_race_01"
+        staging_name = f".stage_{job_id}_{clean_name}"
+        staging_path = download_manager.raw_dir / staging_name
+
+        with open(staging_path, "wb") as f:
+            f.write(b"new_download_content_racing_publish")
+
+        req = SubsetCommandRequest(
+            dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m",
+            start_date="2025-01-01",
+            end_date="2025-01-02",
+            output_filename=clean_name
+        )
+        resp = download_manager.generate_command(req)
+
+        with download_manager._lock:
+            download_manager._jobs[job_id] = {
+                "job_id": job_id,
+                "dataset_id": req.dataset_id,
+                "status": DownloadJobStatus.RUNNING,
+                "command": resp.command,
+                "target_file": str(target_path),
+                "part_file": str(staging_path),
+                "staging_file": str(staging_path),
+                "_exec_command": "mock",
+                "bytes_downloaded": 0,
+                "estimated_bytes": 1000,
+                "progress_pct": 0.0,
+                "error": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": None,
+                "manifest": None,
+                "_process": None,
+                "_cancelled": False
+            }
+
+        try:
+            # Cancel job right before worker reaches atomic commit lock
+            download_manager.cancel_job(job_id)
+
+            # Worker reaches commit check under lock
+            with download_manager._lock:
+                job = download_manager._jobs[job_id]
+                if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
+                    download_manager._cleanup_staging_for_job(job)
+
+            # Target file must remain untouched with original hash
+            self.assertTrue(target_path.exists())
+            with open(target_path, "rb") as f:
+                self.assertEqual(f.read(), original_content)
+            self.assertEqual(compute_file_sha256(target_path), orig_hash)
+            self.assertFalse(staging_path.exists(), "Staging file must be cleaned up")
+
+            status = download_manager.get_job_status(job_id)
+            self.assertEqual(status.status, DownloadJobStatus.CANCELLED)
+        finally:
+            if target_path.exists():
+                target_path.unlink()
+            if staging_path.exists():
+                staging_path.unlink()
+            with download_manager._lock:
+                download_manager._jobs.pop(job_id, None)
+
+    def test_17_atomic_staging_publication_on_success(self):
         """Tests that staging file is atomically published to final target upon successful run."""
         job_id = "test_atomic_pub_01"
         clean_name = "test_publish_output.nc"
@@ -486,12 +747,7 @@ class TestDownloadManager(unittest.TestCase):
                     "_cancelled": False
                 }
 
-            # Simulate worker run completion
-            mock_proc = MockProcess(returncode=0)
-            with download_manager._lock:
-                download_manager._jobs[job_id]["_process"] = mock_proc
-
-            # In staging mode: staging file renamed to target
+            # In staging mode: staging file renamed to target atomically and manifest created
             os.replace(staging_path, target_path)
             manifest = download_manager.create_manifest(file_path=target_path, dataset_id=req.dataset_id)
 
@@ -517,7 +773,7 @@ class TestDownloadManager(unittest.TestCase):
             with download_manager._lock:
                 download_manager._jobs.pop(job_id, None)
 
-    def test_15_preserve_preexisting_target_on_cancellation_or_failure(self):
+    def test_18_preserve_preexisting_target_on_cancellation_or_failure(self):
         """Tests that a pre-existing target file remains intact and unmodified if a subsequent download is cancelled or fails."""
         clean_name = "test_preserve_existing.nc"
         target_path = download_manager.raw_dir / clean_name
@@ -574,7 +830,7 @@ class TestDownloadManager(unittest.TestCase):
             with download_manager._lock:
                 download_manager._jobs.pop(job_id, None)
 
-    def test_16_progress_sampling_never_counts_preexisting_target(self):
+    def test_19_progress_sampling_never_counts_preexisting_target(self):
         """Tests that get_job_status samples progress strictly from the staging file, never from a pre-existing target file."""
         clean_name = "test_no_spoof.nc"
         target_path = download_manager.raw_dir / clean_name

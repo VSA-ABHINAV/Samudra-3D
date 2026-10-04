@@ -641,8 +641,16 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
     await setupStandardRoutes(page);
     const jobId = 'job_test_07_races';
     let pollCount = 0;
-    let releaseFirstPoll;
-    const firstPollPromise = new Promise(resolve => { releaseFirstPoll = resolve; });
+
+    let signalPoll1Started;
+    const poll1StartedPromise = new Promise(resolve => { signalPoll1Started = resolve; });
+    let releasePoll1;
+    const poll1Promise = new Promise(resolve => { releasePoll1 = resolve; });
+
+    let signalPoll2Started;
+    const poll2StartedPromise = new Promise(resolve => { signalPoll2Started = resolve; });
+    let releasePoll2;
+    const poll2Promise = new Promise(resolve => { releasePoll2 = resolve; });
 
     await page.route('**/api/datasets/download', async (route) => {
       if (route.request().method() === 'POST') {
@@ -669,8 +677,9 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
     await page.route(`**/api/datasets/download/status/${jobId}`, async (route) => {
       pollCount += 1;
       if (pollCount === 1) {
-        // Hold first poll (with low progress)
-        await firstPollPromise;
+        // Poll 1: early low progress RUNNING, held until released
+        signalPoll1Started();
+        await poll1Promise;
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
@@ -687,7 +696,9 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
           })
         });
       } else if (pollCount === 2) {
-        // Second poll resolves immediately with high progress
+        // Poll 2: mid-progress RUNNING, also held to be released after COMPLETED
+        signalPoll2Started();
+        await poll2Promise;
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
@@ -695,8 +706,8 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
             job_id: jobId,
             dataset_id: 'cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m',
             status: 'RUNNING',
-            progress_pct: 75.0,
-            bytes_downloaded: 20000000,
+            progress_pct: 60.0,
+            bytes_downloaded: 16000000,
             estimated_bytes: 26633830,
             target_file: 'cmems_subset_arabian_sea.nc',
             error: null,
@@ -704,6 +715,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
           })
         });
       } else {
+        // Poll 3: terminal COMPLETED state, resolves immediately
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
@@ -730,15 +742,30 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
 
     await expect(page.locator('[data-testid="active-download-job-card"]')).toBeVisible();
 
-    // Wait for second poll to advance progress to 75.0%
-    await expect(page.locator('[data-testid="download-progress-pct"]')).toHaveText(/75\.0%|100\.0%/, { timeout: 8000 });
+    // Confirm Poll 1 and Poll 2 have both been initiated and are held
+    await poll1StartedPromise;
+    await poll2StartedPromise;
 
-    // Release held first poll (15.0% progress)
-    releaseFirstPoll();
+    // Poll 3 resolves immediately with COMPLETED (100.0%)
+    await expect(page.locator('[data-testid="download-job-status"]')).toHaveText('COMPLETED', { timeout: 8000 });
+    await expect(page.locator('[data-testid="download-progress-pct"]')).toHaveText('100.0%');
+    await expect(page.locator('[data-testid="download-byte-stats"]')).toContainText('25.40 MB (Complete)');
+    await expect(page.locator('[data-testid="dismiss-download-btn"]')).toBeVisible();
 
-    // Verify progress does NOT regress back to 15.0%
+    // Now release held Poll 1 (15.0% RUNNING) and Poll 2 (60.0% RUNNING)
+    releasePoll2();
+    releasePoll1();
+
+    // Verify terminal COMPLETED state, 100.0% progress, and byte count remain completely protected and unchanged
+    await expect(page.locator('[data-testid="download-job-status"]')).toHaveText('COMPLETED');
+    await expect(page.locator('[data-testid="download-progress-pct"]')).toHaveText('100.0%');
+    await expect(page.locator('[data-testid="download-byte-stats"]')).toContainText('25.40 MB (Complete)');
     await expect(page.locator('[data-testid="download-progress-pct"]')).not.toHaveText('15.0%');
-    await expect(page.locator('[data-testid="download-progress-pct"]')).toHaveText(/75\.0%|100\.0%/);
+    await expect(page.locator('[data-testid="download-progress-pct"]')).not.toHaveText('60.0%');
+    await expect(page.locator('[data-testid="download-byte-stats"]')).not.toContainText('2.86 MB');
+    await expect(page.locator('[data-testid="download-byte-stats"]')).not.toContainText('15.26 MB');
+    await expect(page.locator('[data-testid="dismiss-download-btn"]')).toBeVisible();
+    await expect(page.locator('[data-testid="cancel-download-btn"]')).not.toBeVisible();
   });
 
   test('TC-P09-08: Malformed or unconfirmed cancel response plus status-fetch failure shows error without fake CANCELLED state', async ({ page }) => {

@@ -395,10 +395,10 @@ class DownloadManager:
         return self.list_manifests()
 
     @staticmethod
-    def _terminate_process_tree(proc: subprocess.Popen, timeout: float = 3.0) -> bool:
+    def _terminate_process_tree(proc: subprocess.Popen, timeout: float = 4.0) -> bool:
         """
         Reliably terminates a subprocess and its entire child process tree across platforms.
-        Raises RuntimeError if the process fails to terminate.
+        Raises RuntimeError if the process tree fails to terminate completely.
         """
         if proc.poll() is not None:
             return True
@@ -407,14 +407,31 @@ class DownloadManager:
         if sys.platform == "win32":
             try:
                 # Terminate entire process tree on Windows using taskkill /F /T
-                subprocess.run(
+                res = subprocess.run(
                     ["taskkill", "/F", "/T", "/PID", str(pid)],
                     capture_output=True,
                     timeout=timeout,
                     check=False
                 )
-            except Exception:
-                pass
+                if res.returncode != 0:
+                    err_out = res.stderr.decode("utf-8", errors="ignore")
+                    if "not found" not in err_out.lower() and "no process" not in err_out.lower():
+                        # Actual taskkill failure on an existing process
+                        if proc.poll() is None:
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
+                            if proc.poll() is None:
+                                raise RuntimeError(f"taskkill failed with code {res.returncode}: {err_out}")
+            except Exception as e:
+                if proc.poll() is None and not isinstance(e, RuntimeError):
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                if proc.poll() is None:
+                    raise RuntimeError(f"Failed to terminate process tree for PID {pid}: {e}")
 
             try:
                 proc.kill()
@@ -422,7 +439,7 @@ class DownloadManager:
                 pass
 
             try:
-                proc.wait(timeout=timeout)
+                proc.wait(timeout=min(2.0, timeout))
             except Exception:
                 pass
         else:
@@ -434,16 +451,32 @@ class DownloadManager:
                 except Exception:
                     os.killpg(pgid, signal.SIGKILL)
                     proc.wait(timeout=1.0)
-            except Exception:
-                try:
-                    proc.kill()
-                    proc.wait(timeout=1.0)
-                except Exception:
-                    pass
+            except Exception as e:
+                if proc.poll() is None:
+                    try:
+                        proc.kill()
+                        proc.wait(timeout=1.0)
+                    except Exception:
+                        pass
+                if proc.poll() is None:
+                    raise RuntimeError(f"Failed to terminate process group for PID {pid}: {e}")
 
         if proc.poll() is None:
             raise RuntimeError(f"Failed to terminate process PID {pid}; process remains running.")
         return True
+
+    def _cleanup_staging_for_job(self, job: Optional[Dict[str, Any]]):
+        """Removes the unique temporary staging file for a job without touching any target file."""
+        if not job:
+            return
+        staging_str = job.get("staging_file") or job.get("part_file")
+        if staging_str:
+            staging_path = Path(staging_str)
+            if staging_path.exists():
+                try:
+                    staging_path.unlink()
+                except Exception:
+                    pass
 
     def start_download_job(self, req: SubsetCommandRequest, force_override: bool = False) -> DownloadJobInfo:
         """
@@ -493,6 +526,8 @@ class DownloadManager:
                 "completed_at": None,
                 "manifest": None,
                 "_process": None,
+                "_launching": False,
+                "_launch_event": threading.Event(),
                 "_cancelled": False
             }
             self._jobs[job_id] = job
@@ -506,9 +541,11 @@ class DownloadManager:
         """Worker thread executing the copernicusmarine CLI command safely into staging."""
         with self._lock:
             job = self._jobs.get(job_id)
-            if not job or job["_cancelled"] or job["status"] == DownloadJobStatus.CANCELLED:
+            if not job or job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
+                self._cleanup_staging_for_job(job)
                 return
             job["status"] = DownloadJobStatus.RUNNING
+            job["_launching"] = True
 
         target_file = Path(job["target_file"])
         staging_file = Path(job["staging_file"])
@@ -527,76 +564,134 @@ class DownloadManager:
                 popen_kwargs["start_new_session"] = True
 
             process = subprocess.Popen(exec_cmd, **popen_kwargs)
+        except Exception as e:
             with self._lock:
-                job["_process"] = process
-
-            stdout, stderr = process.communicate()
-
-            with self._lock:
-                if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
-                    job["status"] = DownloadJobStatus.CANCELLED
-                    if not job.get("completed_at"):
-                        job["completed_at"] = datetime.now(timezone.utc).isoformat()
-                    if staging_file.exists():
-                        try:
-                            staging_file.unlink()
-                        except Exception:
-                            pass
-                    return
-
-            if process.returncode != 0:
-                with self._lock:
-                    if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
-                        return
+                job["_launching"] = False
+                job["_launch_event"].set()
+                if not job.get("_cancelled") and job["status"] != DownloadJobStatus.CANCELLED:
                     job["status"] = DownloadJobStatus.FAILED
-                    job["error"] = stderr or stdout or f"Command failed with code {process.returncode}"
+                    job["error"] = str(e)
                     job["completed_at"] = datetime.now(timezone.utc).isoformat()
-                if staging_file.exists():
-                    try:
-                        staging_file.unlink()
-                    except Exception:
-                        pass
+                self._cleanup_staging_for_job(job)
+            return
+
+        with self._lock:
+            job["_launching"] = False
+            job["_process"] = process
+            job["_launch_event"].set()
+            # Check if cancellation occurred while Popen was executing
+            if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
+                try:
+                    self._terminate_process_tree(process)
+                except Exception:
+                    pass
+                job["status"] = DownloadJobStatus.CANCELLED
+                job["_process"] = None
+                if not job.get("completed_at"):
+                    job["completed_at"] = datetime.now(timezone.utc).isoformat()
+                self._cleanup_staging_for_job(job)
                 return
 
-            if staging_file.exists():
-                # Atomically publish staging output to final target
-                os.replace(staging_file, target_file)
+        try:
+            stdout, stderr = process.communicate()
+        except Exception as comm_err:
+            with self._lock:
+                if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
+                    self._cleanup_staging_for_job(job)
+                    return
+                job["status"] = DownloadJobStatus.FAILED
+                job["error"] = f"Process communication error: {comm_err}"
+                job["completed_at"] = datetime.now(timezone.utc).isoformat()
+                self._cleanup_staging_for_job(job)
+            return
 
-                manifest = self.create_manifest(
-                    file_path=target_file,
-                    dataset_id=req.dataset_id,
-                    bounds={"lat_min": req.lat_min, "lat_max": req.lat_max, "lon_min": req.lon_min, "lon_max": req.lon_max},
-                    variables=req.variables,
-                    time_range={"start": req.start_date, "end": req.end_date}
-                )
-                with self._lock:
-                    if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
-                        return
-                    job["status"] = DownloadJobStatus.COMPLETED
-                    job["progress_pct"] = 100.0
-                    job["bytes_downloaded"] = target_file.stat().st_size
-                    job["manifest"] = manifest.model_dump()
+        with self._lock:
+            if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
+                job["status"] = DownloadJobStatus.CANCELLED
+                if not job.get("completed_at"):
                     job["completed_at"] = datetime.now(timezone.utc).isoformat()
-            else:
-                with self._lock:
-                    if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
-                        return
-                    job["status"] = DownloadJobStatus.FAILED
-                    job["error"] = "Command executed successfully but staging output file was not found."
-                    job["completed_at"] = datetime.now(timezone.utc).isoformat()
+                self._cleanup_staging_for_job(job)
+                return
 
-        except Exception as e:
+        if process.returncode != 0:
+            with self._lock:
+                if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
+                    self._cleanup_staging_for_job(job)
+                    return
+                job["status"] = DownloadJobStatus.FAILED
+                job["error"] = stderr or stdout or f"Command failed with code {process.returncode}"
+                job["completed_at"] = datetime.now(timezone.utc).isoformat()
+                self._cleanup_staging_for_job(job)
+            return
+
+        if not staging_file.exists():
             with self._lock:
                 if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
                     return
                 job["status"] = DownloadJobStatus.FAILED
-                job["error"] = str(e)
+                job["error"] = "Command executed successfully but staging output file was not found."
                 job["completed_at"] = datetime.now(timezone.utc).isoformat()
-            if staging_file.exists():
-                try:
-                    staging_file.unlink()
-                except Exception:
-                    pass
+            return
+
+        # Transactional publication: Verify/prepare manifest from staging BEFORE touching final target
+        try:
+            file_size = staging_file.stat().st_size
+            sha256 = compute_file_sha256(staging_file)
+            manifest_id = f"manifest_{target_file.stem}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+            record = ManifestRecord(
+                manifest_id=manifest_id,
+                dataset_id=req.dataset_id,
+                file_name=target_file.name,
+                file_path=str(target_file.resolve()),
+                file_size_bytes=file_size,
+                file_size_mb=round(file_size / (1024 * 1024), 2),
+                sha256=sha256,
+                created_at=datetime.now(timezone.utc).isoformat(),
+                variables=req.variables or ["thetao", "so", "uo", "vo"],
+                bounds={"lat_min": req.lat_min, "lat_max": req.lat_max, "lon_min": req.lon_min, "lon_max": req.lon_max},
+                time_range={"start": req.start_date, "end": req.end_date},
+                verified=True,
+                provenance_badge="[REAL • COPERNICUS]"
+            )
+            manifest_out_path = self.manifests_dir / f"{manifest_id}.json"
+            manifest_content = record.model_dump_json(indent=2)
+            manifest_dict = record.model_dump()
+        except Exception as prep_err:
+            # Manifest verification/preparation failed from staging:
+            # Do NOT replace target_file; mark FAILED and clean staging file only
+            with self._lock:
+                if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
+                    self._cleanup_staging_for_job(job)
+                    return
+                job["status"] = DownloadJobStatus.FAILED
+                job["error"] = f"Manifest preparation failed: {prep_err}"
+                job["completed_at"] = datetime.now(timezone.utc).isoformat()
+                self._cleanup_staging_for_job(job)
+            return
+
+        # Atomic commit boundary: Coordinate replace, manifest write, and COMPLETED state under lock
+        with self._lock:
+            if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
+                # Cancellation arrived before commit point; discard staging without touching target
+                self._cleanup_staging_for_job(job)
+                return
+
+            try:
+                os.replace(staging_file, target_file)
+                with open(manifest_out_path, "w", encoding="utf-8") as f:
+                    f.write(manifest_content)
+
+                job["status"] = DownloadJobStatus.COMPLETED
+                job["progress_pct"] = 100.0
+                job["bytes_downloaded"] = file_size
+                job["manifest"] = manifest_dict
+                job["completed_at"] = datetime.now(timezone.utc).isoformat()
+                job["_process"] = None
+            except Exception as pub_err:
+                job["status"] = DownloadJobStatus.FAILED
+                job["error"] = f"Atomic publication failed: {pub_err}"
+                job["completed_at"] = datetime.now(timezone.utc).isoformat()
+                self._cleanup_staging_for_job(job)
 
     def get_job_status(self, job_id: str) -> Optional[DownloadJobInfo]:
         """Retrieves live status of a download job with filesystem evidence sampling from staging output."""
@@ -640,22 +735,31 @@ class DownloadManager:
             if job["status"] in (DownloadJobStatus.COMPLETED, DownloadJobStatus.FAILED, DownloadJobStatus.CANCELLED):
                 return False
 
+            job["_cancelled"] = True
+            is_launching = job.get("_launching", False)
+            launch_event = job.get("_launch_event")
             proc = job.get("_process")
-            staging_file = Path(job.get("staging_file") or job.get("part_file", ""))
 
+        # If job is actively in the middle of subprocess.Popen, wait for registration to finalize
+        if is_launching and launch_event and proc is None:
+            launch_event.wait(timeout=3.0)
+            with self._lock:
+                proc = job.get("_process")
+
+        # Terminate active process tree and verify complete exit
         if proc and proc.poll() is None:
             self._terminate_process_tree(proc)
 
         with self._lock:
-            job["_cancelled"] = True
-            job["status"] = DownloadJobStatus.CANCELLED
-            job["completed_at"] = datetime.now(timezone.utc).isoformat()
+            # Check if job completed atomically before/during termination
+            if job["status"] in (DownloadJobStatus.COMPLETED, DownloadJobStatus.FAILED):
+                return False
 
-        if staging_file.exists():
-            try:
-                staging_file.unlink()
-            except Exception:
-                pass
+            job["status"] = DownloadJobStatus.CANCELLED
+            job["_process"] = None
+            if not job.get("completed_at"):
+                job["completed_at"] = datetime.now(timezone.utc).isoformat()
+            self._cleanup_staging_for_job(job)
 
         return True
 
