@@ -637,4 +637,185 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
     await expect(startBtn).toBeDisabled();
   });
 
+  test('TC-P09-07: Out-of-order and held status polls cannot regress bytes or progress, nor overwrite terminal state', async ({ page }) => {
+    await setupStandardRoutes(page);
+    const jobId = 'job_test_07_races';
+    let pollCount = 0;
+    let releaseFirstPoll;
+    const firstPollPromise = new Promise(resolve => { releaseFirstPoll = resolve; });
+
+    await page.route('**/api/datasets/download', async (route) => {
+      if (route.request().method() === 'POST') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            job_id: jobId,
+            dataset_id: 'cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m',
+            status: 'RUNNING',
+            progress_pct: 10.0,
+            bytes_downloaded: 2000000,
+            estimated_bytes: 26633830,
+            target_file: 'cmems_subset_arabian_sea.nc',
+            error: null,
+            manifest_file: null
+          })
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    await page.route(`**/api/datasets/download/status/${jobId}`, async (route) => {
+      pollCount += 1;
+      if (pollCount === 1) {
+        // Hold first poll (with low progress)
+        await firstPollPromise;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            job_id: jobId,
+            dataset_id: 'cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m',
+            status: 'RUNNING',
+            progress_pct: 15.0,
+            bytes_downloaded: 3000000,
+            estimated_bytes: 26633830,
+            target_file: 'cmems_subset_arabian_sea.nc',
+            error: null,
+            manifest_file: null
+          })
+        });
+      } else if (pollCount === 2) {
+        // Second poll resolves immediately with high progress
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            job_id: jobId,
+            dataset_id: 'cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m',
+            status: 'RUNNING',
+            progress_pct: 75.0,
+            bytes_downloaded: 20000000,
+            estimated_bytes: 26633830,
+            target_file: 'cmems_subset_arabian_sea.nc',
+            error: null,
+            manifest_file: null
+          })
+        });
+      } else {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            job_id: jobId,
+            dataset_id: 'cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m',
+            status: 'COMPLETED',
+            progress_pct: 100.0,
+            bytes_downloaded: 26633830,
+            estimated_bytes: 26633830,
+            target_file: 'cmems_subset_arabian_sea.nc',
+            error: null,
+            manifest_file: 'manifest_job_test_07.json'
+          })
+        });
+      }
+    });
+
+    await page.goto('/');
+    await openDownloaderTab(page);
+
+    await page.getByRole('button', { name: /Generate & Verify Safe Command/i }).click();
+    await page.locator('[data-testid="start-download-btn"]').click();
+
+    await expect(page.locator('[data-testid="active-download-job-card"]')).toBeVisible();
+
+    // Wait for second poll to advance progress to 75.0%
+    await expect(page.locator('[data-testid="download-progress-pct"]')).toHaveText(/75\.0%|100\.0%/, { timeout: 8000 });
+
+    // Release held first poll (15.0% progress)
+    releaseFirstPoll();
+
+    // Verify progress does NOT regress back to 15.0%
+    await expect(page.locator('[data-testid="download-progress-pct"]')).not.toHaveText('15.0%');
+    await expect(page.locator('[data-testid="download-progress-pct"]')).toHaveText(/75\.0%|100\.0%/);
+  });
+
+  test('TC-P09-08: Malformed or unconfirmed cancel response plus status-fetch failure shows error without fake CANCELLED state', async ({ page }) => {
+    await setupStandardRoutes(page);
+    const jobId = 'job_test_08_cancel_malformed';
+
+    await page.route('**/api/datasets/download', async (route) => {
+      if (route.request().method() === 'POST') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            job_id: jobId,
+            dataset_id: 'cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m',
+            status: 'RUNNING',
+            progress_pct: 40.0,
+            bytes_downloaded: 10000000,
+            estimated_bytes: 26633830,
+            target_file: 'cmems_subset_arabian_sea.nc',
+            error: null,
+            manifest_file: null
+          })
+        });
+      } else {
+        await route.continue();
+      }
+    });
+
+    await page.route(`**/api/datasets/download/status/${jobId}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          job_id: jobId,
+          dataset_id: 'cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m',
+          status: 'RUNNING',
+          progress_pct: 40.0,
+          bytes_downloaded: 10000000,
+          estimated_bytes: 26633830,
+          target_file: 'cmems_subset_arabian_sea.nc',
+          error: null,
+          manifest_file: null
+        })
+      });
+    });
+
+    // Cancel endpoint returns malformed/unconfirmed response (e.g. status: 'error')
+    await page.route(`**/api/datasets/download/cancel/${jobId}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          status: 'error',
+          detail: 'Worker process locked by OS'
+        })
+      });
+    });
+
+    await page.goto('/');
+    await openDownloaderTab(page);
+
+    await page.getByRole('button', { name: /Generate & Verify Safe Command/i }).click();
+    await page.locator('[data-testid="start-download-btn"]').click();
+
+    await expect(page.locator('[data-testid="active-download-job-card"]')).toBeVisible();
+
+    const cancelBtn = page.locator('[data-testid="cancel-download-btn"]');
+    await cancelBtn.click();
+
+    // Verify error is displayed visibly to user
+    const errorAlert = page.locator('[role="alert"], .bg-rose-950\\/60');
+    await expect(errorAlert).toBeVisible({ timeout: 5000 });
+    await expect(errorAlert).toContainText(/Worker process locked|Cancellation not confirmed/i);
+
+    // Verify job does NOT synthesize fake CANCELLED state and remains RUNNING
+    await expect(page.locator('[data-testid="download-job-status"]')).toHaveText('RUNNING');
+    await expect(cancelBtn).toBeVisible();
+  });
+
 });

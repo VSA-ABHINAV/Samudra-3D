@@ -144,10 +144,11 @@ export default function App() {
   // Dataset Download Job & Progress state
   const [activeDownloadJob, setActiveDownloadJob] = useState(null);
   const downloadPollGenRef = useRef(0);
+  const downloadPollSeqRef = useRef(0);
   const activeJobId = activeDownloadJob?.job_id;
   const activeJobStatus = activeDownloadJob?.status;
 
-  // Background polling for active download job
+  // Background polling for active download job with response sequence guarding
   useEffect(() => {
     if (!activeJobId || !['QUEUED', 'RUNNING'].includes(activeJobStatus)) {
       return;
@@ -157,13 +158,29 @@ export default function App() {
     const jobId = activeJobId;
 
     const intervalId = window.setInterval(() => {
+      const pollSeq = ++downloadPollSeqRef.current;
       fetchDownloadStatus(jobId)
         .then((latest) => {
           if (downloadPollGenRef.current !== currentPollGen) return;
+          if (pollSeq < downloadPollSeqRef.current) {
+            // Out of order stale poll response arriving late; discard
+            return;
+          }
           setActiveDownloadJob((prev) => {
             if (!prev || prev.job_id !== jobId) return prev;
+            // Terminal states are strictly immutable and cannot be overwritten by non-terminal status
             if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(prev.status) && ['QUEUED', 'RUNNING'].includes(latest.status)) {
               return prev;
+            }
+            // Prevent progress or byte count from regressing downwards when both are in RUNNING state
+            if (prev.status === 'RUNNING' && latest.status === 'RUNNING') {
+              const safeBytes = Math.max(prev.bytes_downloaded || 0, latest.bytes_downloaded || 0);
+              const safePct = Math.max(prev.progress_pct || 0, latest.progress_pct || 0);
+              return {
+                ...latest,
+                bytes_downloaded: safeBytes,
+                progress_pct: safePct
+              };
             }
             return latest;
           });

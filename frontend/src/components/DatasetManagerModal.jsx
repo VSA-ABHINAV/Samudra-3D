@@ -208,12 +208,26 @@ export default function DatasetManagerModal({
     setCancellingJob(true);
     setError(null);
     try {
-      await cancelDatasetDownload(activeJob.job_id);
-      const latest = await fetchDownloadStatus(activeJob.job_id).catch(() => ({
-        ...activeJob,
-        status: 'CANCELLED'
-      }));
-      setJob(latest);
+      const cancelRes = await cancelDatasetDownload(activeJob.job_id);
+      const isConfirmed = Boolean(
+        cancelRes && (
+          cancelRes.status === 'ok' ||
+          cancelRes.status === 'cancelled' ||
+          cancelRes.status === 'CANCELLED'
+        )
+      );
+      if (!isConfirmed) {
+        throw new Error(cancelRes?.detail || cancelRes?.error || 'Cancellation not confirmed by server');
+      }
+
+      // Reconcile with latest server status
+      try {
+        const latest = await fetchDownloadStatus(activeJob.job_id);
+        setJob(latest);
+      } catch {
+        // Status fetch failed, but cancel endpoint explicitly confirmed cancellation
+        setJob(prev => prev ? { ...prev, status: 'CANCELLED' } : null);
+      }
       setSuccessMsg(`Download job '${activeJob.job_id}' cancelled.`);
     } catch (err) {
       setError(err.message || 'Failed to cancel download job');

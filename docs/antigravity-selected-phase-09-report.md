@@ -2,40 +2,42 @@
 
 ## Status: READY FOR CODEX REVIEW
 
-Date: October 3, 2026
+Date: October 4, 2026
 Branch: `release/reviewed-core-2026-09-29`
-Commit: `a09443d2c4e9fc2a7679c522bdd6423801873fde` (`a09443d`)
 Scope: Download Progress and Cancellation (Importance 3/5)
 
 ---
 
-## 1. Executive Summary & Changes Made
+## 1. Executive Summary & Corrections Applied
 
-Selected Phase 09 implements atomic chunked dataset download progress monitoring and cancellation lifecycle management in SAMUDRA-3D in accordance with `docs/antigravity-selected-phase-09-download-progress-cancellation.md` and `docs/selected-features-plan.md`.
+Selected Phase 09 implements atomic chunked dataset download progress monitoring, staging output publication, response sequence guarding, process tree cancellation, and verified SHA-256 manifests in SAMUDRA-3D in accordance with `docs/antigravity-selected-phase-09-download-progress-cancellation.md`, `docs/antigravity-selected-phase-09-corrections.md`, and `docs/selected-features-plan.md`.
 
-### Key Implementation Details
+### Summary of Corrections Applied
 
-1. **Active Download Job Card & Persistent Lifecycle UI (`frontend/src/components/DatasetManagerModal.jsx` & `frontend/src/App.jsx`)**:
-   - Lifted `activeDownloadJob` state and background polling interval to `App.jsx` so active download jobs continue tracking across modal open/close and tab switches without silent cancellation.
-   - Rendered persistent Job Card (`[data-testid="active-download-job-card"]`) in the downloader tab with job ID, status badge, target filename, determinate/indeterminate progress bars, byte transfer statistics, error panel, and cancellation controls.
-   - Clamped in-progress percentage strictly below 100.0% (`min(99.0, ...)`) while non-terminal and display 100.0% only upon confirmed `COMPLETED` status.
-   - Automatically triggered `loadManifests()` upon job completion so new verified SHA-256 manifests appear in the ledger immediately without requiring manual page reload.
-   - Prevented duplicate start submissions by disabling start button (`[data-testid="start-download-btn"]`) during in-flight submission and while an active job is queued or running.
+1. **Process Tree Termination & Failure Surfacing (`backend/app/data/download_manager.py` & `backend/app/routers/datasets.py`)**:
+   - Implemented cross-platform `_terminate_process_tree` using `taskkill /F /T /PID` on Windows (and process group `killpg` on POSIX) to guarantee that both the worker process and its actual child downloader processes are terminated before reporting cancellation.
+   - If process termination fails or times out, an error is surfaced (HTTP 500) and the job is NOT falsely marked `CANCELLED`.
+   - Verified via unit test `test_12_process_tree_termination_on_cancellation` (spawning a live child process and verifying termination) and `test_13_cancellation_termination_failure_surfaced`.
 
-2. **Accurate API Service Layer (`frontend/src/services/api.js`)**:
-   - `startDatasetDownload`, `fetchDownloadStatus`, and `cancelDatasetDownload` correctly encode parameters and parse JSON error payloads (`detail`).
+2. **Staging Output & Atomic Publication (`backend/app/data/download_manager.py`)**:
+   - Each job writes to a unique same-filesystem staging path (`.stage_{job_id}_{clean_filename}`).
+   - Progress sampling reads strictly from `staging_file`, never from `target_file` (preventing progress inflation from pre-existing target files).
+   - Upon successful process exit (returncode 0), the staging file is atomically published to `target_file` via `os.replace` and a verified manifest is created.
+   - On cancellation or failure, only the job's temporary staging file is deleted, preserving any pre-existing valid target file unmodified with intact SHA-256 checksums.
+   - Verified via unit tests `test_14_atomic_staging_publication_on_success`, `test_15_preserve_preexisting_target_on_cancellation_or_failure`, and `test_16_progress_sampling_never_counts_preexisting_target`.
 
-3. **Synchronized Process & Filesystem Evidence (`backend/app/data/download_manager.py`)**:
-   - Added live filesystem sampling in `get_job_status` reading actual written `.part` or target file size without fabricating progress values.
-   - Enhanced `cancel_job` to terminate active downloader processes (and child processes where supported), remove temporary `.part` files, preserve already-valid completed targets, and prevent cancel races.
-   - Completed/failed/cancelled jobs remain immutable (returns `False` -> HTTP 404).
-   - Added duplicate target collision prevention rejecting start requests when another active job targets the same destination file.
+3. **Polling Response Sequence Guarding & Monotonic Progress (`frontend/src/App.jsx`)**:
+   - Added monotonic `downloadPollSeqRef` sequence-guarding in `App.jsx` background polling. Older in-flight poll responses arriving late are discarded.
+   - Guarded against progress/byte regressions when in `RUNNING` status and ensured terminal states (`COMPLETED`, `FAILED`, `CANCELLED`) can never be overwritten by stale non-terminal responses.
+   - Verified in Playwright test `TC-P09-07`.
 
-4. **Backend Unit & Contract Tests (`backend/tests/test_download_manager.py`)**:
-   - Added 11 unit and mock tests validating measured byte progress, percentage clamping, completion immutability, active cancellation, process termination, `.part` cleanup, cancellation races, unknown job 404 handling, and target collision prevention without making external network calls.
+4. **UI Cancellation Confirmation Alignment (`frontend/src/components/DatasetManagerModal.jsx`)**:
+   - `handleCancelDownload` strictly validates that the server cancel response explicitly confirms cancellation (`status === 'ok'` or `'cancelled'`).
+   - If cancellation is unconfirmed or fails, the client does not synthesize a fake `CANCELLED` status, displays an error alert to the user, and leaves the job intact for background status polling recovery.
+   - Verified in Playwright test `TC-P09-08`.
 
-5. **Deterministic Playwright Test Suite (`frontend/tests/selected-phase-09.spec.js`)**:
-   - 6 test cases (`TC-P09-01` through `TC-P09-06`) validating full lifecycle: start -> live progress -> completion + manifest refresh, active cancellation and cleanup, persistent tracking across modal close/reopen, cancellation failure recovery, download failure display, and duplicate-start prevention.
+5. **Accurate Per-Spec Verification Breakdown**:
+   - Updated the report breakdown to accurately reflect all 12 spec files and test counts.
 
 ---
 
@@ -43,14 +45,15 @@ Selected Phase 09 implements atomic chunked dataset download progress monitoring
 
 | File | Type | Description |
 |---|---|---|
-| `backend/app/data/download_manager.py` | Modified | Added collision check, live filesystem byte sampling, progress clamping, robust process termination, and `.part` cleanup |
-| `backend/tests/test_download_manager.py` | Modified | Added 11 unit/contract tests for byte progress, clamping, cancellation, process kill, cleanup, and collisions |
+| `backend/app/data/download_manager.py` | Modified | Added unique staging output path, atomic `os.replace` publish, staging-only progress sampling, cross-platform process tree termination, and target collision check |
+| `backend/app/routers/datasets.py` | Modified | Handled `cancel_job` process termination exceptions with HTTP 500 error reporting |
+| `backend/tests/test_download_manager.py` | Modified | Added unit/contract tests (16 tests total) for process tree termination, failure surfacing, atomic staging publish, pre-existing target preservation, and staging-only progress |
 | `frontend/src/services/api.js` | Modified | Verified download start, status, and cancel service calls with error extraction |
-| `frontend/src/App.jsx` | Modified | Added persistent active download job state and background polling interval across modal views |
-| `frontend/src/components/DatasetManagerModal.jsx` | Modified | Added Active Job Card with progress bar, cancel action, error display, manifest refresh trigger, and disabled start button states |
-| `frontend/tests/selected-phase-09.spec.js` | Created | Comprehensive Playwright test suite for Phase 09 (6 test cases) |
-| `docs/selected-features-plan.md` | Modified | Updated Phase 09 status to READY FOR CODEX REVIEW |
-| `docs/antigravity-selected-phase-09-report.md` | Created | This implementation and verification report |
+| `frontend/src/App.jsx` | Modified | Added persistent active download job state, background polling interval, and poll response sequence guarding across modal views |
+| `frontend/src/components/DatasetManagerModal.jsx` | Modified | Added Active Job Card with progress bar, cancel action, validated cancellation confirmation, error display, and manifest refresh trigger |
+| `frontend/tests/selected-phase-09.spec.js` | Created | Comprehensive Playwright test suite for Phase 09 (8 test cases including held-poll races and unconfirmed cancel handling) |
+| `docs/selected-features-plan.md` | Modified | Maintained Phase 09 status as READY FOR CODEX REVIEW |
+| `docs/antigravity-selected-phase-09-report.md` | Created/Updated | This implementation and verification report |
 
 ---
 
@@ -75,33 +78,33 @@ Result: **PASSED (0 errors, 0 warnings)**
 
 ### 2. Frontend Production Build
 Command: `npm.cmd run build` (in `frontend/`)
-Result: **PASSED (built in 1.86s, 0 errors)**
+Result: **PASSED (built in 3.52s, 0 errors)**
 
 ### 3. Transition Queue Unit Test
 Command: `node --test tests/transitionQueue.test.js` (in `frontend/`)
-Result: **PASSED (2/2 tests pass in 98ms)**
+Result: **PASSED (2/2 tests pass in 142ms)**
 
 ### 4. Backend Unit & Contract Tests
 Command: `.\.venv\Scripts\python.exe -m unittest backend.tests.test_download_manager backend.tests.test_anomaly backend.tests.test_collocation backend.tests.test_probe_transect` (from repo root)
-Result: **PASSED (40/40 tests pass in 1.306s)**
+Result: **PASSED (45/45 tests pass in 2.647s)**
 
 ### 5. Combined Playwright Test Suite
 Command: `npx.cmd playwright test tests/globe-box.spec.js tests/selected-phase-05.spec.js tests/selected-phase-06.spec.js tests/selected-phase-07.spec.js tests/selected-phase-08.spec.js tests/selected-phase-09.spec.js tests/core-phase-01.spec.js tests/core-phase-01-contract-review.spec.js tests/core-phase-02.spec.js tests/core-phase-02-identity-review.spec.js tests/core-phase-03.spec.js tests/core-phase-04.spec.js --reporter=list` (in `frontend/`)
-Result: **PASSED (85/85 tests pass in 3.5m)**
+Result: **PASSED (87/87 tests pass in 4.6m)**
 
-Breakdown (sum = 85):
-- `tests/globe-box.spec.js`: 1 passed
+Breakdown (sum = 87):
+- `tests/globe-box.spec.js`: 2 passed
 - `tests/core-phase-01.spec.js`: 16 passed
 - `tests/core-phase-01-contract-review.spec.js`: 1 passed
 - `tests/core-phase-02.spec.js`: 10 passed
-- `tests/core-phase-02-identity-review.spec.js`: 5 passed
-- `tests/core-phase-03.spec.js`: 8 passed
-- `tests/core-phase-04.spec.js`: 6 passed
+- `tests/core-phase-02-identity-review.spec.js`: 6 passed
+- `tests/core-phase-03.spec.js`: 7 passed
+- `tests/core-phase-04.spec.js`: 5 passed
 - `tests/selected-phase-05.spec.js`: 7 passed
 - `tests/selected-phase-06.spec.js`: 7 passed
 - `tests/selected-phase-07.spec.js`: 10 passed
 - `tests/selected-phase-08.spec.js`: 8 passed
-- `tests/selected-phase-09.spec.js`: 6 passed
+- `tests/selected-phase-09.spec.js`: 8 passed
 
 ### 6. Git Diff Whitespace & Syntax Check
 Command: `git diff --check` (from repo root)

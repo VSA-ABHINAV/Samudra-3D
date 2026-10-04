@@ -9,6 +9,7 @@ import json
 import uuid
 import shutil
 import hashlib
+import signal
 import threading
 import subprocess
 from pathlib import Path
@@ -393,25 +394,87 @@ class DownloadManager:
 
         return self.list_manifests()
 
+    @staticmethod
+    def _terminate_process_tree(proc: subprocess.Popen, timeout: float = 3.0) -> bool:
+        """
+        Reliably terminates a subprocess and its entire child process tree across platforms.
+        Raises RuntimeError if the process fails to terminate.
+        """
+        if proc.poll() is not None:
+            return True
+
+        pid = proc.pid
+        if sys.platform == "win32":
+            try:
+                # Terminate entire process tree on Windows using taskkill /F /T
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    capture_output=True,
+                    timeout=timeout,
+                    check=False
+                )
+            except Exception:
+                pass
+
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+            try:
+                proc.wait(timeout=timeout)
+            except Exception:
+                pass
+        else:
+            try:
+                pgid = os.getpgid(pid)
+                os.killpg(pgid, signal.SIGTERM)
+                try:
+                    proc.wait(timeout=1.0)
+                except Exception:
+                    os.killpg(pgid, signal.SIGKILL)
+                    proc.wait(timeout=1.0)
+            except Exception:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=1.0)
+                except Exception:
+                    pass
+
+        if proc.poll() is None:
+            raise RuntimeError(f"Failed to terminate process PID {pid}; process remains running.")
+        return True
+
     def start_download_job(self, req: SubsetCommandRequest, force_override: bool = False) -> DownloadJobInfo:
         """
         Creates and enqueues an asynchronous atomic download job.
-        Writes to .part file and performs atomic rename on completion.
+        Writes to a unique staging file and performs atomic publish (rename) on completion.
         """
         response = self.generate_command(req)
         if not response.can_execute_automatically and not force_override:
             raise ValueError(f"Download blocked by safety policy: {response.warning_message}")
 
         job_id = str(uuid.uuid4())[:8]
-        target_file = self.raw_dir / response.recommended_output_filename
-        part_file = self.raw_dir / f"{response.recommended_output_filename}.part"
+        clean_filename = response.recommended_output_filename
+        target_file = self.raw_dir / clean_filename
+        staging_filename = f".stage_{job_id}_{clean_filename}"
+        staging_file = self.raw_dir / staging_filename
+
+        # Formulate execution command targeting the unique staging output file
+        exec_cmd = response.command
+        if f'--output-filename "{clean_filename}"' in exec_cmd:
+            exec_cmd = exec_cmd.replace(f'--output-filename "{clean_filename}"', f'--output-filename "{staging_filename}"')
+        elif f'--output-filename {clean_filename}' in exec_cmd:
+            exec_cmd = exec_cmd.replace(f'--output-filename {clean_filename}', f'--output-filename "{staging_filename}"')
+        else:
+            exec_cmd = f"{exec_cmd} --output-filename \"{staging_filename}\""
 
         with self._lock:
             # Prevent starting duplicate jobs that would collide with an active output
             for j in self._jobs.values():
                 if j["status"] in (DownloadJobStatus.QUEUED, DownloadJobStatus.RUNNING):
-                    if j["target_file"] == str(target_file) or j["part_file"] == str(part_file):
-                        raise ValueError(f"A download job ({j['job_id']}) is already active for output '{response.recommended_output_filename}'.")
+                    if j["target_file"] == str(target_file):
+                        raise ValueError(f"A download job ({j['job_id']}) is already active for output '{clean_filename}'.")
 
             job = {
                 "job_id": job_id,
@@ -419,7 +482,9 @@ class DownloadManager:
                 "status": DownloadJobStatus.QUEUED,
                 "command": response.command,
                 "target_file": str(target_file),
-                "part_file": str(part_file),
+                "part_file": str(staging_file),
+                "staging_file": str(staging_file),
+                "_exec_command": exec_cmd,
                 "bytes_downloaded": 0,
                 "estimated_bytes": int(response.estimate.estimated_transfer_mb * 1024 * 1024),
                 "progress_pct": 0.0,
@@ -438,7 +503,7 @@ class DownloadManager:
         return self.get_job_status(job_id)
 
     def _run_job(self, job_id: str, req: SubsetCommandRequest, response: SubsetCommandResponse):
-        """Worker thread executing the copernicusmarine CLI command safely."""
+        """Worker thread executing the copernicusmarine CLI command safely into staging."""
         with self._lock:
             job = self._jobs.get(job_id)
             if not job or job["_cancelled"] or job["status"] == DownloadJobStatus.CANCELLED:
@@ -446,16 +511,22 @@ class DownloadManager:
             job["status"] = DownloadJobStatus.RUNNING
 
         target_file = Path(job["target_file"])
-        part_file = Path(job["part_file"])
+        staging_file = Path(job["staging_file"])
+        exec_cmd = job.get("_exec_command", response.command)
 
         try:
-            process = subprocess.Popen(
-                response.command,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
+            popen_kwargs: Dict[str, Any] = {
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+                "text": True,
+                "shell": True
+            }
+            if sys.platform == "win32":
+                popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            else:
+                popen_kwargs["start_new_session"] = True
+
+            process = subprocess.Popen(exec_cmd, **popen_kwargs)
             with self._lock:
                 job["_process"] = process
 
@@ -466,9 +537,9 @@ class DownloadManager:
                     job["status"] = DownloadJobStatus.CANCELLED
                     if not job.get("completed_at"):
                         job["completed_at"] = datetime.now(timezone.utc).isoformat()
-                    if part_file.exists():
+                    if staging_file.exists():
                         try:
-                            part_file.unlink()
+                            staging_file.unlink()
                         except Exception:
                             pass
                     return
@@ -480,9 +551,17 @@ class DownloadManager:
                     job["status"] = DownloadJobStatus.FAILED
                     job["error"] = stderr or stdout or f"Command failed with code {process.returncode}"
                     job["completed_at"] = datetime.now(timezone.utc).isoformat()
+                if staging_file.exists():
+                    try:
+                        staging_file.unlink()
+                    except Exception:
+                        pass
                 return
 
-            if target_file.exists():
+            if staging_file.exists():
+                # Atomically publish staging output to final target
+                os.replace(staging_file, target_file)
+
                 manifest = self.create_manifest(
                     file_path=target_file,
                     dataset_id=req.dataset_id,
@@ -503,7 +582,7 @@ class DownloadManager:
                     if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
                         return
                     job["status"] = DownloadJobStatus.FAILED
-                    job["error"] = "Command executed successfully but output file was not found."
+                    job["error"] = "Command executed successfully but staging output file was not found."
                     job["completed_at"] = datetime.now(timezone.utc).isoformat()
 
         except Exception as e:
@@ -513,27 +592,26 @@ class DownloadManager:
                 job["status"] = DownloadJobStatus.FAILED
                 job["error"] = str(e)
                 job["completed_at"] = datetime.now(timezone.utc).isoformat()
+            if staging_file.exists():
+                try:
+                    staging_file.unlink()
+                except Exception:
+                    pass
 
     def get_job_status(self, job_id: str) -> Optional[DownloadJobInfo]:
-        """Retrieves live status of a download job with filesystem evidence sampling."""
+        """Retrieves live status of a download job with filesystem evidence sampling from staging output."""
         with self._lock:
             job = self._jobs.get(job_id)
             if not job:
                 return None
 
-            # Live sampling of disk evidence when job is in a non-terminal state
+            # Live sampling of disk evidence strictly from staging file while job is in a non-terminal state
             if job["status"] in (DownloadJobStatus.RUNNING, DownloadJobStatus.QUEUED):
-                part_path = Path(job.get("part_file", ""))
-                target_path = Path(job.get("target_file", ""))
+                staging_path = Path(job.get("staging_file") or job.get("part_file", ""))
                 curr_size = 0
-                if part_path.exists():
+                if staging_path.exists():
                     try:
-                        curr_size = part_path.stat().st_size
-                    except Exception:
-                        pass
-                elif target_path.exists():
-                    try:
-                        curr_size = target_path.stat().st_size
+                        curr_size = staging_path.stat().st_size
                     except Exception:
                         pass
 
@@ -550,7 +628,10 @@ class DownloadManager:
             return DownloadJobInfo(**info)
 
     def cancel_job(self, job_id: str) -> bool:
-        """Cancels a running or queued download job."""
+        """
+        Cancels a running or queued download job, terminates its process tree,
+        and cleans up temporary staging files while preserving any existing target file.
+        """
         with self._lock:
             job = self._jobs.get(job_id)
             if not job:
@@ -559,25 +640,20 @@ class DownloadManager:
             if job["status"] in (DownloadJobStatus.COMPLETED, DownloadJobStatus.FAILED, DownloadJobStatus.CANCELLED):
                 return False
 
+            proc = job.get("_process")
+            staging_file = Path(job.get("staging_file") or job.get("part_file", ""))
+
+        if proc and proc.poll() is None:
+            self._terminate_process_tree(proc)
+
+        with self._lock:
             job["_cancelled"] = True
             job["status"] = DownloadJobStatus.CANCELLED
             job["completed_at"] = datetime.now(timezone.utc).isoformat()
-            proc = job.get("_process")
-            part_file = Path(job.get("part_file", ""))
 
-        if proc:
+        if staging_file.exists():
             try:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=1.0)
-                except Exception:
-                    proc.kill()
-            except Exception:
-                pass
-
-        if part_file.exists():
-            try:
-                part_file.unlink()
+                staging_file.unlink()
             except Exception:
                 pass
 

@@ -200,15 +200,23 @@ def get_download_status(job_id: str):
 @router.post("/download/cancel/{job_id}", summary="Cancel active download job")
 def cancel_download(job_id: str):
     """
-    Cancels an active download job and cleans up temporary .part files.
+    Cancels an active download job and cleans up temporary staging files.
     """
-    ok = download_manager.cancel_job(job_id)
-    if not ok:
+    try:
+        ok = download_manager.cancel_job(job_id)
+        if not ok:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Job '{job_id}' not found or already terminated"
+            )
+        return {"status": "cancelled", "job_id": job_id}
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Job '{job_id}' not found or already terminated"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to cancel job '{job_id}': {str(e)}"
         )
-    return {"status": "cancelled", "job_id": job_id}
 
 
 @router.post("/custom", response_model=DatasetDescriptor, summary="Register custom dataset or sensor feed")
