@@ -674,9 +674,11 @@ export default function DatasetManagerModal({
                       <span>✓</span>
                       <span>Download completed successfully. Verified SHA-256 manifest created.</span>
                     </div>
-                    {activeJob.manifest_file && (
+                    {(activeJob.manifest?.manifest_id || activeJob.manifest_file || activeJob.manifest?.file_name) && (
                       <div className="text-[11px] text-emerald-300/90 pl-5" data-testid="download-manifest-record">
-                        Manifest: <span className="font-semibold text-white">{activeJob.manifest_file}</span>
+                        Manifest: <span className="font-semibold text-white">
+                          {activeJob.manifest?.manifest_id ? `${activeJob.manifest.manifest_id}.json` : (activeJob.manifest_file || activeJob.manifest?.file_name)}
+                        </span>
                       </div>
                     )}
                   </div>

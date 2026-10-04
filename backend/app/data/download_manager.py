@@ -100,6 +100,8 @@ class DownloadJobInfo(BaseModel):
     created_at: str
     completed_at: Optional[str] = None
     manifest: Optional[ManifestRecord] = None
+    manifest_file: Optional[str] = None
+
 
 
 def compute_file_sha256(file_path: Path) -> str:
@@ -583,8 +585,15 @@ class DownloadManager:
             if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
                 try:
                     self._terminate_process_tree(process)
-                except Exception:
-                    pass
+                except Exception as term_err:
+                    job["status"] = DownloadJobStatus.FAILED
+                    job["error"] = f"Cancellation failed to terminate process tree: {term_err}"
+                    job["_process"] = None
+                    if not job.get("completed_at"):
+                        job["completed_at"] = datetime.now(timezone.utc).isoformat()
+                    self._cleanup_staging_for_job(job)
+                    return
+
                 job["status"] = DownloadJobStatus.CANCELLED
                 job["_process"] = None
                 if not job.get("completed_at"):
@@ -676,18 +685,57 @@ class DownloadManager:
                 self._cleanup_staging_for_job(job)
                 return
 
+            clean_filename = target_file.name
+            backup_target = self.raw_dir / f".backup_{job_id}_{clean_filename}"
+            target_had_prior_file = target_file.exists()
+            manifest_created = False
+
             try:
-                os.replace(staging_file, target_file)
+                if target_had_prior_file:
+                    shutil.copy2(target_file, backup_target)
+
                 with open(manifest_out_path, "w", encoding="utf-8") as f:
                     f.write(manifest_content)
+                manifest_created = True
+
+                os.replace(staging_file, target_file)
+
+                if backup_target.exists():
+                    try:
+                        backup_target.unlink()
+                    except Exception:
+                        pass
 
                 job["status"] = DownloadJobStatus.COMPLETED
                 job["progress_pct"] = 100.0
                 job["bytes_downloaded"] = file_size
                 job["manifest"] = manifest_dict
+                job["manifest_file"] = f"{manifest_id}.json"
                 job["completed_at"] = datetime.now(timezone.utc).isoformat()
                 job["_process"] = None
             except Exception as pub_err:
+                if manifest_created and manifest_out_path.exists():
+                    try:
+                        manifest_out_path.unlink()
+                    except Exception:
+                        pass
+
+                if target_had_prior_file and backup_target.exists():
+                    try:
+                        os.replace(backup_target, target_file)
+                    except Exception:
+                        pass
+                elif not target_had_prior_file and target_file.exists() and not staging_file.exists():
+                    try:
+                        target_file.unlink()
+                    except Exception:
+                        pass
+                elif backup_target.exists():
+                    try:
+                        backup_target.unlink()
+                    except Exception:
+                        pass
+
                 job["status"] = DownloadJobStatus.FAILED
                 job["error"] = f"Atomic publication failed: {pub_err}"
                 job["completed_at"] = datetime.now(timezone.utc).isoformat()
@@ -719,7 +767,13 @@ class DownloadManager:
 
             info = {k: v for k, v in job.items() if not k.startswith("_")}
             if info.get("manifest"):
-                info["manifest"] = ManifestRecord(**info["manifest"])
+                if isinstance(info["manifest"], dict):
+                    if not info.get("manifest_file") and info["manifest"].get("manifest_id"):
+                        info["manifest_file"] = f"{info['manifest']['manifest_id']}.json"
+                    info["manifest"] = ManifestRecord(**info["manifest"])
+                elif isinstance(info["manifest"], ManifestRecord):
+                    if not info.get("manifest_file"):
+                        info["manifest_file"] = f"{info['manifest'].manifest_id}.json"
             return DownloadJobInfo(**info)
 
     def cancel_job(self, job_id: str) -> bool:

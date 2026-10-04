@@ -4,8 +4,13 @@ Verifies command generation, safety thresholds, disk headroom validation, SHA-25
 live filesystem progress sampling, cancellation, and terminal state immutability.
 """
 import unittest
+import unittest.mock
 import tempfile
 import os
+import sys
+import time
+import threading
+import subprocess
 from pathlib import Path
 from datetime import datetime, timezone
 from fastapi.testclient import TestClient
@@ -438,78 +443,136 @@ class TestDownloadManager(unittest.TestCase):
 
     def test_13_launch_registration_race_cancellation(self):
         """Tests that cancellation during worker launch/Popen cleanly terminates the process upon registration."""
-        import subprocess
-        import sys
-        import threading
-        import time
+        popen_called = threading.Event()
+        allow_popen_return = threading.Event()
+        real_popen = subprocess.Popen
+        real_procs = []
 
-        job_id = "test_launch_race_01"
-        clean_name = "test_launch_race.nc"
-        target_path = download_manager.raw_dir / clean_name
-        staging_name = f".stage_{job_id}_{clean_name}"
-        staging_path = download_manager.raw_dir / staging_name
+        def mock_popen(*args, **kwargs):
+            cmd = args[0] if args else kwargs.get("args")
+            if isinstance(cmd, list) and len(cmd) > 0 and "taskkill" in str(cmd[0]).lower():
+                return real_popen(*args, **kwargs)
+            popen_called.set()
+            allow_popen_return.wait(timeout=5.0)
+            proc = real_popen(f'"{sys.executable}" -c "import time; time.sleep(10)"', **kwargs)
+            real_procs.append(proc)
+            return proc
 
-        with open(staging_path, "wb") as f:
-            f.write(b"in_flight_launch_bytes")
+        req = SubsetCommandRequest(
+            dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m",
+            start_date="2025-01-01",
+            end_date="2025-01-02",
+            output_filename="test_launch_race_exec.nc"
+        )
 
-        launch_event = threading.Event()
-        with download_manager._lock:
-            download_manager._jobs[job_id] = {
-                "job_id": job_id,
-                "dataset_id": "test_dataset",
-                "status": DownloadJobStatus.RUNNING,
-                "command": "mock",
-                "target_file": str(target_path),
-                "part_file": str(staging_path),
-                "staging_file": str(staging_path),
-                "bytes_downloaded": 0,
-                "estimated_bytes": 1000,
-                "progress_pct": 0.0,
-                "error": None,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "completed_at": None,
-                "manifest": None,
-                "_process": None,
-                "_launching": True,
-                "_launch_event": launch_event,
-                "_cancelled": False
-            }
-
-        # Spawn a genuine sleep process in background
-        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(10)"])
-
-        def worker_finishes_launch():
-            time.sleep(0.1)
-            with download_manager._lock:
-                download_manager._jobs[job_id]["_launching"] = False
-                download_manager._jobs[job_id]["_process"] = proc
-                launch_event.set()
-                if download_manager._jobs[job_id].get("_cancelled"):
-                    download_manager._terminate_process_tree(proc)
-                    download_manager._jobs[job_id]["status"] = DownloadJobStatus.CANCELLED
-                    download_manager._cleanup_staging_for_job(download_manager._jobs[job_id])
-
-        t = threading.Thread(target=worker_finishes_launch)
-        t.start()
-
+        job_id = None
         try:
-            # cancel_job is called while _launching is True
-            res = download_manager.cancel_job(job_id)
-            self.assertTrue(res)
-            t.join(timeout=3.0)
+            with unittest.mock.patch("subprocess.Popen", side_effect=mock_popen):
+                job_info = download_manager.start_download_job(req, force_override=True)
+                job_id = job_info.job_id
+                target_path = Path(job_info.target_file)
+                staging_path = Path(job_info.part_file)
 
-            # Assert process is terminated and job is cancelled
-            self.assertIsNotNone(proc.poll(), "Process must be terminated by launch-registration race handler")
-            status = download_manager.get_job_status(job_id)
-            self.assertEqual(status.status, DownloadJobStatus.CANCELLED)
-            self.assertFalse(staging_path.exists(), "Staging file must be cleaned up")
+                # Wait until _run_job enters Popen
+                self.assertTrue(popen_called.wait(timeout=3.0), "Worker must invoke subprocess.Popen")
+
+                # Cancel the job while Popen is in-flight on the worker thread
+                def do_cancel():
+                    return download_manager.cancel_job(job_id)
+
+                cancel_thread = threading.Thread(target=do_cancel)
+                cancel_thread.start()
+
+                # Now allow mock_popen to return the spawned process
+                allow_popen_return.set()
+                cancel_thread.join(timeout=5.0)
+
+                # Wait briefly for worker thread to finish its post-launch cancellation handling
+                for _ in range(50):
+                    st = download_manager.get_job_status(job_id)
+                    if st and st.status == DownloadJobStatus.CANCELLED:
+                        break
+                    time.sleep(0.05)
+
+                status = download_manager.get_job_status(job_id)
+                self.assertEqual(status.status, DownloadJobStatus.CANCELLED)
+                for proc in real_procs:
+                    self.assertIsNotNone(proc.poll(), "Spawned process must be terminated")
+                self.assertFalse(staging_path.exists(), "Staging file must be cleaned up")
         finally:
-            if proc.poll() is None:
-                proc.kill()
-            if staging_path.exists():
-                staging_path.unlink()
-            with download_manager._lock:
-                download_manager._jobs.pop(job_id, None)
+            allow_popen_return.set()
+            for proc in real_procs:
+                if proc.poll() is None:
+                    try:
+                        proc.kill()
+                        proc.wait(timeout=1.0)
+                    except Exception:
+                        pass
+            if job_id:
+                with download_manager._lock:
+                    download_manager._jobs.pop(job_id, None)
+
+    def test_13b_launch_registration_race_termination_failure(self):
+        """Tests that if process tree termination throws in worker upon post-launch cancel, worker transitions job to FAILED."""
+        popen_called = threading.Event()
+        allow_popen_return = threading.Event()
+        real_popen = subprocess.Popen
+        real_procs = []
+
+        def mock_popen(*args, **kwargs):
+            cmd = args[0] if args else kwargs.get("args")
+            if isinstance(cmd, list) and len(cmd) > 0 and "taskkill" in str(cmd[0]).lower():
+                return real_popen(*args, **kwargs)
+            popen_called.set()
+            allow_popen_return.wait(timeout=5.0)
+            proc = real_popen(f'"{sys.executable}" -c "import time; time.sleep(10)"', **kwargs)
+            real_procs.append(proc)
+            return proc
+
+        req = SubsetCommandRequest(
+            dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m",
+            start_date="2025-01-01",
+            end_date="2025-01-02",
+            output_filename="test_launch_race_fail.nc"
+        )
+
+        job_id = None
+        try:
+            with unittest.mock.patch("subprocess.Popen", side_effect=mock_popen), \
+                 unittest.mock.patch.object(download_manager, "_terminate_process_tree", side_effect=RuntimeError("Simulated taskkill access denied")):
+                job_info = download_manager.start_download_job(req, force_override=True)
+                job_id = job_info.job_id
+
+                self.assertTrue(popen_called.wait(timeout=3.0))
+
+                # Mark cancelled directly while in launch
+                with download_manager._lock:
+                    download_manager._jobs[job_id]["_cancelled"] = True
+
+                allow_popen_return.set()
+
+                # Wait for worker thread to complete
+                for _ in range(50):
+                    st = download_manager.get_job_status(job_id)
+                    if st and st.status in (DownloadJobStatus.FAILED, DownloadJobStatus.CANCELLED):
+                        break
+                    time.sleep(0.05)
+
+                status = download_manager.get_job_status(job_id)
+                self.assertEqual(status.status, DownloadJobStatus.FAILED, "Worker must mark FAILED when termination throws")
+                self.assertIn("Cancellation failed to terminate process tree", status.error)
+        finally:
+            allow_popen_return.set()
+            for proc in real_procs:
+                if proc.poll() is None:
+                    try:
+                        proc.kill()
+                        proc.wait(timeout=1.0)
+                    except Exception:
+                        pass
+            if job_id:
+                with download_manager._lock:
+                    download_manager._jobs.pop(job_id, None)
 
     def test_14_cancellation_termination_failure_surfaced(self):
         """Tests that if process termination fails, an error is raised and HTTP 500 is returned by API."""
@@ -555,7 +618,7 @@ class TestDownloadManager(unittest.TestCase):
                 download_manager._jobs.pop(job_id, None)
 
     def test_15_manifest_creation_failure_preserves_prior_target(self):
-        """Tests that if manifest creation fails during finalization, pre-existing target file remains intact and job is marked FAILED."""
+        """Tests that if manifest writing fails during worker commit, pre-existing target file is restored and job is marked FAILED."""
         clean_name = "test_preserve_on_manifest_fail.nc"
         target_path = download_manager.raw_dir / clean_name
         original_content = b"sacred_target_content_preserved_before_manifest_fail"
@@ -564,12 +627,6 @@ class TestDownloadManager(unittest.TestCase):
             f.write(original_content)
 
         orig_hash = compute_file_sha256(target_path)
-        job_id = "test_manifest_fail_01"
-        staging_name = f".stage_{job_id}_{clean_name}"
-        staging_path = download_manager.raw_dir / staging_name
-
-        with open(staging_path, "wb") as f:
-            f.write(b"new_download_content_that_failed_manifesting")
 
         req = SubsetCommandRequest(
             dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m",
@@ -578,17 +635,23 @@ class TestDownloadManager(unittest.TestCase):
             output_filename=clean_name
         )
         resp = download_manager.generate_command(req)
+        job_id = "test_manifest_write_fail_job"
+        staging_name = f".stage_{job_id}_{clean_name}"
+        staging_path = download_manager.raw_dir / staging_name
 
         with download_manager._lock:
             download_manager._jobs[job_id] = {
                 "job_id": job_id,
                 "dataset_id": req.dataset_id,
-                "status": DownloadJobStatus.RUNNING,
+                "status": DownloadJobStatus.QUEUED,
                 "command": resp.command,
                 "target_file": str(target_path),
                 "part_file": str(staging_path),
                 "staging_file": str(staging_path),
-                "_exec_command": "mock",
+                "_exec_command": subprocess.list2cmdline([
+                    sys.executable, "-c",
+                    f"import pathlib; pathlib.Path(r'{staging_path}').write_bytes(b'new_download_content_that_failed_manifesting')"
+                ]),
                 "bytes_downloaded": 0,
                 "estimated_bytes": 1000,
                 "progress_pct": 0.0,
@@ -597,20 +660,24 @@ class TestDownloadManager(unittest.TestCase):
                 "completed_at": None,
                 "manifest": None,
                 "_process": None,
+                "_launching": False,
+                "_launch_event": threading.Event(),
                 "_cancelled": False
             }
 
-        try:
-            # Simulate worker transactional step with simulated manifest prep failure
-            job = download_manager._jobs[job_id]
-            # If manifest prep throws:
-            with download_manager._lock:
-                job["status"] = DownloadJobStatus.FAILED
-                job["error"] = "Manifest preparation failed: Simulated metadata corruption"
-                job["completed_at"] = datetime.now(timezone.utc).isoformat()
-                download_manager._cleanup_staging_for_job(job)
+        # Patch open so that writing to manifests_dir raises an error
+        orig_open = open
+        def faulty_open(file, *args, **kwargs):
+            if isinstance(file, (str, Path)) and str(download_manager.manifests_dir) in str(file) and any(m in str(args) or m in str(kwargs) for m in ('w', 'wb', 'a')):
+                raise IOError("Simulated disk write failure on manifest file")
+            return orig_open(file, *args, **kwargs)
 
-            # Assert target file was NOT replaced and still holds original content/hash
+        try:
+            with unittest.mock.patch("builtins.open", side_effect=faulty_open):
+                # Run the actual worker
+                download_manager._run_job(job_id, req, resp)
+
+            # Assert target file was preserved/restored and still holds original content/hash
             self.assertTrue(target_path.exists())
             with open(target_path, "rb") as f:
                 self.assertEqual(f.read(), original_content)
@@ -619,6 +686,7 @@ class TestDownloadManager(unittest.TestCase):
 
             status = download_manager.get_job_status(job_id)
             self.assertEqual(status.status, DownloadJobStatus.FAILED)
+            self.assertIn("Atomic publication failed", status.error)
         finally:
             if target_path.exists():
                 target_path.unlink()
@@ -627,22 +695,19 @@ class TestDownloadManager(unittest.TestCase):
             with download_manager._lock:
                 download_manager._jobs.pop(job_id, None)
 
-    def test_16_cancellation_racing_publish_boundary(self):
-        """Tests that if cancellation wins right before atomic publish lock, target file is preserved and staging is discarded."""
-        clean_name = "test_cancel_at_publish_boundary.nc"
+    def test_16a_cancellation_racing_before_publish_lock(self):
+        """Tests that if cancellation is requested right before the atomic commit block in _run_job, target is untouched and staging cleaned up."""
+        clean_name = "test_cancel_before_pub_lock.nc"
         target_path = download_manager.raw_dir / clean_name
-        original_content = b"original_target_before_publish_race"
+        original_content = b"original_target_content_before_race"
 
         with open(target_path, "wb") as f:
             f.write(original_content)
 
         orig_hash = compute_file_sha256(target_path)
-        job_id = "test_pub_race_01"
+        job_id = "test_pub_race_before_lock"
         staging_name = f".stage_{job_id}_{clean_name}"
         staging_path = download_manager.raw_dir / staging_name
-
-        with open(staging_path, "wb") as f:
-            f.write(b"new_download_content_racing_publish")
 
         req = SubsetCommandRequest(
             dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m",
@@ -656,12 +721,15 @@ class TestDownloadManager(unittest.TestCase):
             download_manager._jobs[job_id] = {
                 "job_id": job_id,
                 "dataset_id": req.dataset_id,
-                "status": DownloadJobStatus.RUNNING,
+                "status": DownloadJobStatus.QUEUED,
                 "command": resp.command,
                 "target_file": str(target_path),
                 "part_file": str(staging_path),
                 "staging_file": str(staging_path),
-                "_exec_command": "mock",
+                "_exec_command": subprocess.list2cmdline([
+                    sys.executable, "-c",
+                    f"import pathlib; pathlib.Path(r'{staging_path}').write_bytes(b'new_in_flight_download_data')"
+                ]),
                 "bytes_downloaded": 0,
                 "estimated_bytes": 1000,
                 "progress_pct": 0.0,
@@ -670,20 +738,22 @@ class TestDownloadManager(unittest.TestCase):
                 "completed_at": None,
                 "manifest": None,
                 "_process": None,
+                "_launching": False,
+                "_launch_event": threading.Event(),
                 "_cancelled": False
             }
 
+        # Hook compute_file_sha256 so that right as manifest is prepared, we invoke cancel_job
+        orig_sha = compute_file_sha256
+        def hook_sha(path):
+            if str(staging_path) in str(path):
+                download_manager.cancel_job(job_id)
+            return orig_sha(path)
+
         try:
-            # Cancel job right before worker reaches atomic commit lock
-            download_manager.cancel_job(job_id)
+            with unittest.mock.patch("backend.app.data.download_manager.compute_file_sha256", side_effect=hook_sha):
+                download_manager._run_job(job_id, req, resp)
 
-            # Worker reaches commit check under lock
-            with download_manager._lock:
-                job = download_manager._jobs[job_id]
-                if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
-                    download_manager._cleanup_staging_for_job(job)
-
-            # Target file must remain untouched with original hash
             self.assertTrue(target_path.exists())
             with open(target_path, "rb") as f:
                 self.assertEqual(f.read(), original_content)
@@ -700,64 +770,118 @@ class TestDownloadManager(unittest.TestCase):
             with download_manager._lock:
                 download_manager._jobs.pop(job_id, None)
 
-    def test_17_atomic_staging_publication_on_success(self):
-        """Tests that staging file is atomically published to final target upon successful run."""
-        job_id = "test_atomic_pub_01"
-        clean_name = "test_publish_output.nc"
+    def test_16b_cancellation_racing_after_publish_lock(self):
+        """Tests that if cancellation is requested after the atomic commit lock completes, the job remains COMPLETED and cancel_job returns False."""
+        clean_name = "test_cancel_after_pub_lock.nc"
         target_path = download_manager.raw_dir / clean_name
+        job_id = "test_pub_race_after_lock"
         staging_name = f".stage_{job_id}_{clean_name}"
         staging_path = download_manager.raw_dir / staging_name
 
+        req = SubsetCommandRequest(
+            dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m",
+            start_date="2025-01-01",
+            end_date="2025-01-02",
+            output_filename=clean_name
+        )
+        resp = download_manager.generate_command(req)
+
+        with download_manager._lock:
+            download_manager._jobs[job_id] = {
+                "job_id": job_id,
+                "dataset_id": req.dataset_id,
+                "status": DownloadJobStatus.QUEUED,
+                "command": resp.command,
+                "target_file": str(target_path),
+                "part_file": str(staging_path),
+                "staging_file": str(staging_path),
+                "_exec_command": subprocess.list2cmdline([
+                    sys.executable, "-c",
+                    f"import pathlib; pathlib.Path(r'{staging_path}').write_bytes(b'committed_ocean_data_payload')"
+                ]),
+                "bytes_downloaded": 0,
+                "estimated_bytes": 1000,
+                "progress_pct": 0.0,
+                "error": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": None,
+                "manifest": None,
+                "_process": None,
+                "_launching": False,
+                "_launch_event": threading.Event(),
+                "_cancelled": False
+            }
+
         try:
+            download_manager._run_job(job_id, req, resp)
+
+            status = download_manager.get_job_status(job_id)
+            self.assertEqual(status.status, DownloadJobStatus.COMPLETED)
+            self.assertTrue(target_path.exists())
+
+            # Attempt cancellation after completion has occurred
+            res = download_manager.cancel_job(job_id)
+            self.assertFalse(res, "cancel_job must return False when job is already COMPLETED")
+
+            status2 = download_manager.get_job_status(job_id)
+            self.assertEqual(status2.status, DownloadJobStatus.COMPLETED, "Completed status must remain immutable")
+        finally:
             if target_path.exists():
                 target_path.unlink()
             if staging_path.exists():
                 staging_path.unlink()
-
-            # Write staging file simulating worker output
-            with open(staging_path, "wb") as f:
-                f.write(b"verified_atomic_ocean_netcdf_payload_content")
-
-            req = SubsetCommandRequest(
-                dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m",
-                start_date="2025-01-01",
-                end_date="2025-01-02",
-                output_filename=clean_name
-            )
-            resp = download_manager.generate_command(req)
-
+            for p in download_manager.manifests_dir.glob(f"manifest_{Path(clean_name).stem}*.json"):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
             with download_manager._lock:
-                download_manager._jobs[job_id] = {
-                    "job_id": job_id,
-                    "dataset_id": req.dataset_id,
-                    "status": DownloadJobStatus.RUNNING,
-                    "command": resp.command,
-                    "target_file": str(target_path),
-                    "part_file": str(staging_path),
-                    "staging_file": str(staging_path),
-                    "_exec_command": "echo mock",
-                    "bytes_downloaded": 0,
-                    "estimated_bytes": 1000,
-                    "progress_pct": 0.0,
-                    "error": None,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "completed_at": None,
-                    "manifest": None,
-                    "_process": None,
-                    "_cancelled": False
-                }
+                download_manager._jobs.pop(job_id, None)
 
-            # In staging mode: staging file renamed to target atomically and manifest created
-            os.replace(staging_path, target_path)
-            manifest = download_manager.create_manifest(file_path=target_path, dataset_id=req.dataset_id)
+    def test_17_atomic_staging_publication_on_success(self):
+        """Tests that staging file is atomically published to final target upon successful worker run."""
+        clean_name = "test_publish_output.nc"
+        target_path = download_manager.raw_dir / clean_name
+        job_id = "test_atomic_pub_worker_01"
+        staging_name = f".stage_{job_id}_{clean_name}"
+        staging_path = download_manager.raw_dir / staging_name
 
-            with download_manager._lock:
-                job = download_manager._jobs[job_id]
-                job["status"] = DownloadJobStatus.COMPLETED
-                job["progress_pct"] = 100.0
-                job["bytes_downloaded"] = target_path.stat().st_size
-                job["manifest"] = manifest.model_dump()
-                job["completed_at"] = datetime.now(timezone.utc).isoformat()
+        req = SubsetCommandRequest(
+            dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m",
+            start_date="2025-01-01",
+            end_date="2025-01-02",
+            output_filename=clean_name
+        )
+        resp = download_manager.generate_command(req)
+
+        with download_manager._lock:
+            download_manager._jobs[job_id] = {
+                "job_id": job_id,
+                "dataset_id": req.dataset_id,
+                "status": DownloadJobStatus.QUEUED,
+                "command": resp.command,
+                "target_file": str(target_path),
+                "part_file": str(staging_path),
+                "staging_file": str(staging_path),
+                "_exec_command": subprocess.list2cmdline([
+                    sys.executable, "-c",
+                    f"import pathlib; pathlib.Path(r'{staging_path}').write_bytes(b'verified_atomic_ocean_netcdf_payload_content')"
+                ]),
+                "bytes_downloaded": 0,
+                "estimated_bytes": 1000,
+                "progress_pct": 0.0,
+                "error": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": None,
+                "manifest": None,
+                "_process": None,
+                "_launching": False,
+                "_launch_event": threading.Event(),
+                "_cancelled": False
+            }
+
+        try:
+            download_manager._run_job(job_id, req, resp)
 
             self.assertTrue(target_path.exists(), "Target file must exist after publication")
             self.assertFalse(staging_path.exists(), "Staging file must have been renamed/published")
@@ -765,11 +889,17 @@ class TestDownloadManager(unittest.TestCase):
             self.assertEqual(status.status, DownloadJobStatus.COMPLETED)
             self.assertEqual(status.progress_pct, 100.0)
             self.assertIsNotNone(status.manifest)
+            self.assertEqual(status.manifest.file_name, clean_name)
         finally:
             if target_path.exists():
                 target_path.unlink()
             if staging_path.exists():
                 staging_path.unlink()
+            for p in download_manager.manifests_dir.glob(f"manifest_{Path(clean_name).stem}*.json"):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
             with download_manager._lock:
                 download_manager._jobs.pop(job_id, None)
 

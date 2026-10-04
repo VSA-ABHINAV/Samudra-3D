@@ -161,7 +161,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
             estimated_bytes: 26633830,
             target_file: 'cmems_subset_arabian_sea.nc',
             error: null,
-            manifest_file: null
+            manifest: null
           })
         });
       } else {
@@ -184,7 +184,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
             estimated_bytes: 26633830,
             target_file: 'cmems_subset_arabian_sea.nc',
             error: null,
-            manifest_file: null
+            manifest: null
           })
         });
       } else if (statusCallCount === 2) {
@@ -200,7 +200,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
             estimated_bytes: 26633830,
             target_file: 'cmems_subset_arabian_sea.nc',
             error: null,
-            manifest_file: null
+            manifest: null
           })
         });
       } else {
@@ -225,12 +225,30 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
             job_id: jobId,
             dataset_id: 'cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m',
             status: 'COMPLETED',
+            command: 'copernicusmarine subset ...',
+            target_file: 'cmems_subset_arabian_sea.nc',
+            part_file: '.stage_job_test_01_cmems_subset_arabian_sea.nc',
             progress_pct: 100.0,
             bytes_downloaded: 26633830,
             estimated_bytes: 26633830,
-            target_file: 'cmems_subset_arabian_sea.nc',
             error: null,
-            manifest_file: 'manifest_job_test_01.json'
+            created_at: '2026-10-03T11:00:00Z',
+            completed_at: '2026-10-03T11:00:05Z',
+            manifest: {
+              manifest_id: 'manifest_job_test_01',
+              dataset_id: 'cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m',
+              file_name: 'cmems_subset_arabian_sea.nc',
+              file_path: 'D:/Samudra 3D/samudra-3d/SAMUDRA_DATA/raw/cmems_subset_arabian_sea.nc',
+              file_size_bytes: 26633830,
+              file_size_mb: 25.4,
+              sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+              created_at: '2026-10-03T11:00:00Z',
+              variables: ['uo', 'vo'],
+              bounds: { lat_min: 8.0, lat_max: 25.0, lon_min: 55.0, lon_max: 77.0 },
+              time_range: { start: '2026-09-01', end: '2026-09-10' },
+              verified: true,
+              provenance_badge: '[REAL • COPERNICUS]'
+            }
           })
         });
       }
@@ -297,7 +315,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
             estimated_bytes: 26633830,
             target_file: 'cmems_subset_arabian_sea.nc',
             error: null,
-            manifest_file: null
+            manifest: null
           })
         });
       } else {
@@ -318,7 +336,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
           estimated_bytes: 26633830,
           target_file: 'cmems_subset_arabian_sea.nc',
           error: null,
-          manifest_file: null
+          manifest: null
         })
       });
     });
@@ -379,7 +397,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
             estimated_bytes: 26633830,
             target_file: 'cmems_subset_arabian_sea.nc',
             error: null,
-            manifest_file: null
+            manifest: null
           })
         });
       } else {
@@ -400,7 +418,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
           estimated_bytes: 26633830,
           target_file: 'cmems_subset_arabian_sea.nc',
           error: null,
-          manifest_file: null
+          manifest: null
         })
       });
     });
@@ -448,7 +466,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
             estimated_bytes: 26633830,
             target_file: 'cmems_subset_arabian_sea.nc',
             error: null,
-            manifest_file: null
+            manifest: null
           })
         });
       } else {
@@ -469,7 +487,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
           estimated_bytes: 26633830,
           target_file: 'cmems_subset_arabian_sea.nc',
           error: null,
-          manifest_file: null
+          manifest: null
         })
       });
     });
@@ -523,7 +541,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
             estimated_bytes: 26633830,
             target_file: 'cmems_subset_arabian_sea.nc',
             error: null,
-            manifest_file: null
+            manifest: null
           })
         });
       } else {
@@ -544,7 +562,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
           estimated_bytes: 26633830,
           target_file: 'cmems_subset_arabian_sea.nc',
           error: 'Remote Copernicus server returned 503 Service Unavailable',
-          manifest_file: null
+          manifest: null
         })
       });
     });
@@ -589,7 +607,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
             estimated_bytes: 26633830,
             target_file: 'cmems_subset_arabian_sea.nc',
             error: null,
-            manifest_file: null
+            manifest: null
           })
         });
       } else {
@@ -610,7 +628,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
           estimated_bytes: 26633830,
           target_file: 'cmems_subset_arabian_sea.nc',
           error: null,
-          manifest_file: null
+          manifest: null
         })
       });
     });
@@ -666,7 +684,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
             estimated_bytes: 26633830,
             target_file: 'cmems_subset_arabian_sea.nc',
             error: null,
-            manifest_file: null
+            manifest: null
           })
         });
       } else {
@@ -692,7 +710,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
             estimated_bytes: 26633830,
             target_file: 'cmems_subset_arabian_sea.nc',
             error: null,
-            manifest_file: null
+            manifest: null
           })
         });
       } else if (pollCount === 2) {
@@ -711,7 +729,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
             estimated_bytes: 26633830,
             target_file: 'cmems_subset_arabian_sea.nc',
             error: null,
-            manifest_file: null
+            manifest: null
           })
         });
       } else {
@@ -723,12 +741,30 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
             job_id: jobId,
             dataset_id: 'cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m',
             status: 'COMPLETED',
+            command: 'copernicusmarine subset ...',
+            target_file: 'cmems_subset_arabian_sea.nc',
+            part_file: '.stage_job_test_07_cmems_subset_arabian_sea.nc',
             progress_pct: 100.0,
             bytes_downloaded: 26633830,
             estimated_bytes: 26633830,
-            target_file: 'cmems_subset_arabian_sea.nc',
             error: null,
-            manifest_file: 'manifest_job_test_07.json'
+            created_at: '2026-10-03T11:00:00Z',
+            completed_at: '2026-10-03T11:00:05Z',
+            manifest: {
+              manifest_id: 'manifest_job_test_07',
+              dataset_id: 'cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m',
+              file_name: 'cmems_subset_arabian_sea.nc',
+              file_path: 'D:/Samudra 3D/samudra-3d/SAMUDRA_DATA/raw/cmems_subset_arabian_sea.nc',
+              file_size_bytes: 26633830,
+              file_size_mb: 25.4,
+              sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+              created_at: '2026-10-03T11:00:00Z',
+              variables: ['uo', 'vo'],
+              bounds: { lat_min: 8.0, lat_max: 25.0, lon_min: 55.0, lon_max: 77.0 },
+              time_range: { start: '2026-09-01', end: '2026-09-10' },
+              verified: true,
+              provenance_badge: '[REAL • COPERNICUS]'
+            }
           })
         });
       }
@@ -786,7 +822,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
             estimated_bytes: 26633830,
             target_file: 'cmems_subset_arabian_sea.nc',
             error: null,
-            manifest_file: null
+            manifest: null
           })
         });
       } else {
@@ -807,7 +843,7 @@ test.describe('Selected Phase 09: Download Progress and Cancellation', () => {
           estimated_bytes: 26633830,
           target_file: 'cmems_subset_arabian_sea.nc',
           error: null,
-          manifest_file: null
+          manifest: null
         })
       });
     });
