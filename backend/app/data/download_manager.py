@@ -276,6 +276,8 @@ class DownloadManager:
             return []
 
         for p in self.manifests_dir.glob("*.json"):
+            if p.name.startswith("."):
+                continue
             try:
                 with open(p, "r", encoding="utf-8") as f:
                     data = json.load(f)
@@ -291,7 +293,7 @@ class DownloadManager:
         target = self.manifests_dir / f"{manifest_id}.json"
         if not target.exists():
             for p in self.manifests_dir.glob("*.json"):
-                if manifest_id in p.stem:
+                if not p.name.startswith(".") and manifest_id in p.stem:
                     target = p
                     break
         if target.exists():
@@ -335,8 +337,18 @@ class DownloadManager:
         )
 
         out_path = self.manifests_dir / f"{manifest_id}.json"
-        with open(out_path, "w", encoding="utf-8") as f:
-            f.write(record.model_dump_json(indent=2))
+        staging_out = self.manifests_dir / f".stage_{manifest_id}.json"
+        try:
+            with open(staging_out, "w", encoding="utf-8") as f:
+                f.write(record.model_dump_json(indent=2))
+            os.replace(staging_out, out_path)
+        except Exception:
+            if staging_out.exists():
+                try:
+                    staging_out.unlink()
+                except Exception:
+                    pass
+            raise
 
         return record
 
@@ -687,19 +699,28 @@ class DownloadManager:
 
             clean_filename = target_file.name
             backup_target = self.raw_dir / f".backup_{job_id}_{clean_filename}"
+            staging_manifest_path = self.manifests_dir / f".stage_manifest_{job_id}_{manifest_id}.json"
             target_had_prior_file = target_file.exists()
-            manifest_created = False
+            target_published = False
+            manifest_published = False
 
             try:
                 if target_had_prior_file:
                     shutil.copy2(target_file, backup_target)
 
-                with open(manifest_out_path, "w", encoding="utf-8") as f:
+                # Write manifest to temporary staging path first
+                with open(staging_manifest_path, "w", encoding="utf-8") as f:
                     f.write(manifest_content)
-                manifest_created = True
 
+                # Atomically publish manifest
+                os.replace(staging_manifest_path, manifest_out_path)
+                manifest_published = True
+
+                # Atomically publish dataset
                 os.replace(staging_file, target_file)
+                target_published = True
 
+                # Clean up target backup on success
                 if backup_target.exists():
                     try:
                         backup_target.unlink()
@@ -714,30 +735,46 @@ class DownloadManager:
                 job["completed_at"] = datetime.now(timezone.utc).isoformat()
                 job["_process"] = None
             except Exception as pub_err:
-                if manifest_created and manifest_out_path.exists():
+                rollback_errors: List[str] = []
+
+                # Clean up temporary staging manifest if left over
+                if staging_manifest_path.exists():
+                    try:
+                        staging_manifest_path.unlink()
+                    except Exception as sm_err:
+                        rollback_errors.append(f"Failed to remove staging manifest ({staging_manifest_path.name}): {sm_err}")
+
+                # Rollback published manifest if publication failed after manifest replacement
+                if manifest_published and manifest_out_path.exists():
                     try:
                         manifest_out_path.unlink()
-                    except Exception:
-                        pass
+                    except Exception as m_err:
+                        rollback_errors.append(f"Failed to remove uncommitted manifest ({manifest_out_path.name}): {m_err}")
 
-                if target_had_prior_file and backup_target.exists():
-                    try:
-                        os.replace(backup_target, target_file)
-                    except Exception:
-                        pass
-                elif not target_had_prior_file and target_file.exists() and not staging_file.exists():
-                    try:
-                        target_file.unlink()
-                    except Exception:
-                        pass
-                elif backup_target.exists():
-                    try:
-                        backup_target.unlink()
-                    except Exception:
-                        pass
+                # Rollback target file
+                if target_had_prior_file:
+                    if backup_target.exists():
+                        try:
+                            os.replace(backup_target, target_file)
+                        except Exception as t_err:
+                            rollback_errors.append(f"Failed to restore prior target from backup ({backup_target.name}): {t_err}")
+                else:
+                    if target_published and target_file.exists():
+                        try:
+                            target_file.unlink()
+                        except Exception as t_err:
+                            rollback_errors.append(f"Failed to remove uncommitted target ({target_file.name}): {t_err}")
+                    if backup_target.exists():
+                        try:
+                            backup_target.unlink()
+                        except Exception:
+                            pass
 
                 job["status"] = DownloadJobStatus.FAILED
-                job["error"] = f"Atomic publication failed: {pub_err}"
+                if rollback_errors:
+                    job["error"] = f"Atomic publication failed: {pub_err}. Rollback failure: {'; '.join(rollback_errors)}"
+                else:
+                    job["error"] = f"Atomic publication failed: {pub_err}"
                 job["completed_at"] = datetime.now(timezone.utc).isoformat()
                 self._cleanup_staging_for_job(job)
 

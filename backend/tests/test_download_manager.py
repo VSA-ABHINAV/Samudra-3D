@@ -687,11 +687,115 @@ class TestDownloadManager(unittest.TestCase):
             status = download_manager.get_job_status(job_id)
             self.assertEqual(status.status, DownloadJobStatus.FAILED)
             self.assertIn("Atomic publication failed", status.error)
+            manifest_files = list(download_manager.manifests_dir.glob(f"*{job_id}*")) + list(download_manager.manifests_dir.glob(f"manifest_{Path(clean_name).stem}*.json"))
+            self.assertEqual(len(manifest_files), 0, "No manifest files should be published or leaked on write failure")
         finally:
             if target_path.exists():
                 target_path.unlink()
             if staging_path.exists():
                 staging_path.unlink()
+            for p in download_manager.manifests_dir.glob(f"*{job_id}*"):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+            for p in download_manager.manifests_dir.glob(f"manifest_{Path(clean_name).stem}*.json"):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+            with download_manager._lock:
+                download_manager._jobs.pop(job_id, None)
+
+    def test_15b_target_restoration_failure_surfaces_error_and_preserves_backup(self):
+        """Tests that if both target publication and target restoration fail, backup is preserved and error details both failures."""
+        clean_name = "test_target_restore_fail.nc"
+        target_path = download_manager.raw_dir / clean_name
+        original_content = b"original_payload_for_restore_failure_test"
+
+        with open(target_path, "wb") as f:
+            f.write(original_content)
+
+        orig_hash = compute_file_sha256(target_path)
+        job_id = "test_restore_fail_job"
+        staging_name = f".stage_{job_id}_{clean_name}"
+        staging_path = download_manager.raw_dir / staging_name
+        backup_target = download_manager.raw_dir / f".backup_{job_id}_{clean_name}"
+
+        req = SubsetCommandRequest(
+            dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m",
+            start_date="2025-01-01",
+            end_date="2025-01-02",
+            output_filename=clean_name
+        )
+        resp = download_manager.generate_command(req)
+
+        with download_manager._lock:
+            download_manager._jobs[job_id] = {
+                "job_id": job_id,
+                "dataset_id": req.dataset_id,
+                "status": DownloadJobStatus.QUEUED,
+                "command": resp.command,
+                "target_file": str(target_path),
+                "part_file": str(staging_path),
+                "staging_file": str(staging_path),
+                "_exec_command": subprocess.list2cmdline([
+                    sys.executable, "-c",
+                    f"import pathlib; pathlib.Path(r'{staging_path}').write_bytes(b'staging_new_download_bytes')"
+                ]),
+                "bytes_downloaded": 0,
+                "estimated_bytes": 1000,
+                "progress_pct": 0.0,
+                "error": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": None,
+                "manifest": None,
+                "_process": None,
+                "_launching": False,
+                "_launch_event": threading.Event(),
+                "_cancelled": False
+            }
+
+        real_replace = os.replace
+        def faulty_replace(src, dst):
+            # Allow manifest staging replace
+            if str(download_manager.manifests_dir) in str(src) or str(download_manager.manifests_dir) in str(dst):
+                return real_replace(src, dst)
+            # Fail on any target file replace (both publication and restoration)
+            raise PermissionError("Simulated file lock preventing target replacement")
+
+        try:
+            with unittest.mock.patch("os.replace", side_effect=faulty_replace):
+                download_manager._run_job(job_id, req, resp)
+
+            status = download_manager.get_job_status(job_id)
+            self.assertEqual(status.status, DownloadJobStatus.FAILED)
+            self.assertIn("Atomic publication failed", status.error)
+            self.assertIn("Rollback failure:", status.error)
+            self.assertIn("Failed to restore prior target from backup", status.error)
+
+            # Backup target file MUST be preserved for operator recovery
+            self.assertTrue(backup_target.exists(), "Backup target file must be preserved when restoration fails")
+            with open(backup_target, "rb") as f:
+                self.assertEqual(f.read(), original_content)
+            self.assertEqual(compute_file_sha256(backup_target), orig_hash)
+        finally:
+            if target_path.exists():
+                target_path.unlink()
+            if staging_path.exists():
+                staging_path.unlink()
+            if backup_target.exists():
+                backup_target.unlink()
+            for p in download_manager.manifests_dir.glob(f"*{job_id}*"):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+            for p in download_manager.manifests_dir.glob(f"manifest_{Path(clean_name).stem}*.json"):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
             with download_manager._lock:
                 download_manager._jobs.pop(job_id, None)
 
