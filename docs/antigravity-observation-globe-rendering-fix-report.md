@@ -4,7 +4,7 @@
 
 Date: October 4, 2026
 Branch: `release/reviewed-core-2026-09-29`
-Scope: Fix 3D Indian Ocean Globe rendering defect triggered when opening Observations fleet drawer / enabling Argo & Glider layers.
+Scope: Fix 3D Indian Ocean Globe rendering defect triggered when opening Observations fleet drawer / enabling Argo & Glider layers and strengthen regression test per review 01.
 
 ---
 
@@ -27,9 +27,14 @@ When opening the Observation Fleet Drawer or activating the in-situ layers (`sho
    - Replaced `THREE.Sprite` with `sizeAttenuation: false` in `createArgoMarker` and `updateMarkerSelectionVisuals` with true 3D spherical mesh geometries.
    - Restored the 3D beacon sphere (`THREE.SphereGeometry(1.2, 16, 16)` with `MeshStandardMaterial` emissive lighting), anchor stem (`THREE.CylinderGeometry(0.12, 0.12, 0.8, 8)`), selection halo ring (`THREE.RingGeometry(1.6, 2.2, 32)` positioned flat along surface normal), and pulse glow outer sphere (`THREE.SphereGeometry(1.7, 16, 16)`).
    - Preserved raycasting hit-detection in `raycastArgoMarkers`, selection highlighting in `updateMarkerSelectionVisuals`, Earth horizon occlusion in `updateOccludedMarkersVisibility`, and clean memory disposal in `disposeArgoMarkers`.
-2. **Added Comprehensive Playwright Regression Test (`frontend/tests/observation-globe-rendering.spec.js`)**:
-   - Tests full workflow at 1920x1080: initial globe render, opening the observation drawer, toggling Argo and Glider layers, selecting an active float, closing the drawer, re-opening the drawer, and independent layer toggles.
-   - Verifies the globe remains 100% spherical and intact without visual artifacts or runtime errors.
+
+2. **Corrected and Strengthened Regression Test (`frontend/tests/observation-globe-rendering.spec.js`)**:
+   - Intercepts the app's actual in-situ endpoints (`/api/insitu/argo`, `/api/insitu/gliders`, `/api/insitu/status`) with valid schemas.
+   - Directly drives visible controls: `data-testid="bottombar-observations-btn"`, `data-testid="bottombar-argo-btn"`, `data-testid="bottombar-gliders-btn"`, filter chips (`[data-testid="filter-argo"]`, `[data-testid="filter-glider"]`, `[data-testid="filter-all"]`), and platform item cards (`.platform-item-card`).
+   - Removes conditional `count() > 0` skips so missing controls trigger failure.
+   - Asserts exact drawer platform counts (`5` total, `3` Argo, `2` Gliders).
+   - Tests all state combinations: Both layers active with drawer open, Both active with drawer closed, Gliders-only, Argo-only, Selected float with halo, and Both-off.
+   - Adds canvas corner pixel sampling checking for space background dark levels (`< 50` brightness), proving absence of viewport-filling quad artifacts.
 
 ---
 
@@ -38,7 +43,7 @@ When opening the Observation Fleet Drawer or activating the in-situ layers (`sho
 | File | Change Type | Description |
 |---|---|---|
 | `frontend/src/utils/argoProfiles.js` | Fix | Replaced unscaled screen-space `Sprite` quads with 3D beacon spheres, stems, and selection halo meshes |
-| `frontend/tests/observation-globe-rendering.spec.js` | Test | Added regression test verifying globe rendering at 1920x1080 across all Observation drawer and layer toggle combinations |
+| `frontend/tests/observation-globe-rendering.spec.js` | Test | Full regression test driving active in-situ layers and asserting clean 3D rendering |
 | `docs/antigravity-observation-globe-rendering-fix-report.md` | Report | This root cause and verification report |
 
 ---
@@ -46,26 +51,30 @@ When opening the Observation Fleet Drawer or activating the in-situ layers (`sho
 ## 4. Evidence Artifacts
 
 Screenshots captured during test execution in `docs/evidence/observation-globe-fix/`:
-- `01-globe-initial-1920x1080.png`: Clean 3D Indian Ocean Globe before opening drawer.
-- `02-observation-drawer-open.png`: Observation Fleet Drawer open with globe intact.
-- `03-argo-gliders-active-drawer-open.png`: Argo float beacons and glider sawtooth tracks active on globe with drawer open.
-- `04-markers-active-drawer-closed.png`: Observation markers active and rendering cleanly after closing drawer.
-- `05-gliders-only-drawer-open.png`: Gliders layer active with drawer re-opened.
-- `06-argo-only-drawer-open.png`: Argo float layer active with drawer re-opened.
+- `01-argo-gliders-active-drawer-open.png`: Observation Fleet Drawer open showing 5 active platforms with 3D Argo beacon spheres and Glider transects rendered on globe.
+- `02-both-layers-active-drawer-closed.png`: Clean full-globe view with both observation layers active and drawer closed.
+- `03-gliders-only-active.png`: Gliders layer active and Argo layer toggled off.
+- `04-argo-only-active.png`: Argo float layer active and Gliders layer toggled off.
+- `05-selected-float-with-halo-drawer-open.png`: Selected Argo float (WMO 2902145) with bright cyan selection halo ring on globe and selected card in drawer.
+- `06-both-off-drawer-open.png`: Both observation layers toggled off with drawer open.
 
 ---
 
 ## 5. Verification Results
 
 1. **Frontend Lint**:
-   - Command: `npm.cmd run lint` (in `frontend/`)
+   - Command: `npm run lint` (in `frontend/`)
    - Result: **PASSED (0 errors, 0 warnings)**
 2. **Frontend Production Build**:
-   - Command: `npm.cmd run build` (in `frontend/`)
-   - Result: **PASSED (built in 3.33s, 0 errors)**
-3. **Globe Regression Tests & New Observation Rendering Test**:
+   - Command: `npm run build` (in `frontend/`)
+   - Result: **PASSED (built in 3.30s, 0 errors)**
+3. **Transition Queue Tests**:
+   - Command: `node tests/transitionQueue.test.js` (in `frontend/`)
+   - Result: **PASSED (2/2 passed)**
+4. **Globe Regression Tests & Observation Rendering Test**:
    - Command: `npx playwright test tests/globe-box.spec.js tests/observation-globe-rendering.spec.js` (in `frontend/`)
-   - Result: **PASSED (3/3 passed in 23.3s)**
-4. **Git Diff Check**:
+   - Result: **PASSED (3/3 passed in 52.9s)**
+5. **Git Diff Check**:
    - Command: `git diff --check`
    - Result: **PASSED (0 issues)**
+
