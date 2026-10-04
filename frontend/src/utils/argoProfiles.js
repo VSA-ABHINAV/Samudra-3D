@@ -90,19 +90,14 @@ export function createArgoMarker(floatData, isSelected = false) {
   const normal = pos.clone().normalize();
   group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
 
-  // Screen-space marker : the marker is a small,
-  // constant-size reference glyph — NOT a giant world-unit stem.  Depth
-  // information belongs in the profile/analysis view, not in world space.
-  const baseSize = isSelected ? 0.85 : 0.6;
-  group.userData.baseSize = baseSize;
+  // 1. Anchor stem connecting globe surface to beacon
+  const stemGeom = new THREE.CylinderGeometry(0.12, 0.12, 0.8, 8);
+  const stemMat = new THREE.MeshBasicMaterial({ color: 0x94a3b8 });
+  const stemMesh = new THREE.Mesh(stemGeom, stemMat);
+  stemMesh.position.set(0, -0.4, 0);
+  group.add(stemMesh);
 
-  // 1b removed: the 2000m world-unit profiling stem is gone (it visually
-  // dominated the globe). See the profile/analysis view for depth data.
-
-  // Screen-space marker sprites : the beacon
-  // and halo keep a constant pixel footprint (sizeAttenuation: false), so a
-  // 2000m observation never visually dominates the globe.  Depth information
-  // belongs in the profile/analysis view, not in world space.
+  // 2. Main beacon sphere
   const isOutlier = floatData.qc_summary && floatData.qc_summary.bad > 0;
   const baseColor = isSelected
     ? FLOAT_COLORS.selected
@@ -110,34 +105,44 @@ export function createArgoMarker(floatData, isSelected = false) {
     ? FLOAT_COLORS.outlier
     : FLOAT_COLORS.default;
 
-  const spriteMat = new THREE.SpriteMaterial({
+  const beaconGeom = new THREE.SphereGeometry(1.2, 16, 16);
+  const beaconMat = new THREE.MeshStandardMaterial({
     color: baseColor,
-    transparent: true,
-    opacity: 0.95,
-    depthTest: true,
-    sizeAttenuation: false
+    emissive: baseColor,
+    emissiveIntensity: isSelected ? 1.2 : 0.75,
+    roughness: 0.3,
+    metalness: 0.2
   });
-  spriteMat.size = baseSize;
-  const beaconMesh = new THREE.Sprite(spriteMat);
+  const beaconMesh = new THREE.Mesh(beaconGeom, beaconMat);
   beaconMesh.name = 'beacon';
   beaconMesh.userData = group.userData;
   group.add(beaconMesh);
-  group.userData.sprite = beaconMesh;
 
-  // 3. Selection halo ring (screen-space)
-  const ringMat = new THREE.SpriteMaterial({
+  // 3. Selection halo ring
+  const ringGeom = new THREE.RingGeometry(1.6, 2.2, 32);
+  const ringMat = new THREE.MeshBasicMaterial({
     color: FLOAT_COLORS.ring,
+    side: THREE.DoubleSide,
     transparent: true,
-    opacity: isSelected ? 0.9 : 0.0,
-    depthTest: true,
-    sizeAttenuation: false
+    opacity: isSelected ? 0.9 : 0.0
   });
-  ringMat.size = baseSize * 1.6;
-  const ringMesh = new THREE.Sprite(ringMat);
+  const ringMesh = new THREE.Mesh(ringGeom, ringMat);
   ringMesh.name = 'selection-ring';
+  ringMesh.rotation.x = Math.PI / 2; // Flat on surface
   ringMesh.visible = isSelected;
   group.add(ringMesh);
-  group.userData.ring = ringMesh;
+
+  // 4. Subtle pulse outer glow sphere
+  const glowGeom = new THREE.SphereGeometry(1.7, 16, 16);
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: baseColor,
+    transparent: true,
+    opacity: isSelected ? 0.35 : 0.15,
+    wireframe: true
+  });
+  const glowMesh = new THREE.Mesh(glowGeom, glowMat);
+  glowMesh.name = 'glow';
+  group.add(glowMesh);
 
   return group;
 }
@@ -191,6 +196,7 @@ export function updateMarkerSelectionVisuals(markersGroup, selectedId) {
 
     const beacon = group.getObjectByName('beacon');
     const ring = group.getObjectByName('selection-ring');
+    const glow = group.getObjectByName('glow');
 
     const isOutlier = group.userData.floatData?.qc_summary?.bad > 0;
     const color = isSelected
@@ -201,7 +207,10 @@ export function updateMarkerSelectionVisuals(markersGroup, selectedId) {
 
     if (beacon && beacon.material) {
       beacon.material.color.setHex(color);
-      beacon.material.opacity = 0.95;
+      if (beacon.material.emissive) {
+        beacon.material.emissive.setHex(color);
+        beacon.material.emissiveIntensity = isSelected ? 1.2 : 0.75;
+      }
       beacon.scale.setScalar(isSelected ? 1.35 : 1.0);
     }
 
@@ -210,8 +219,11 @@ export function updateMarkerSelectionVisuals(markersGroup, selectedId) {
       ring.material.opacity = isSelected ? 0.9 : 0.0;
     }
 
-  // Sprite-based markers have no mesh children to pulse/scale; selection state
-  // is fully captured by beacon color + halo visibility above.
+    if (glow && glow.material) {
+      glow.material.color.setHex(color);
+      glow.material.opacity = isSelected ? 0.4 : 0.15;
+      glow.scale.setScalar(isSelected ? 1.4 : 1.0);
+    }
   });
 }
 
