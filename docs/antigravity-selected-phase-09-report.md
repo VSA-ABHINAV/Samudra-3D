@@ -4,7 +4,7 @@
 
 Date: October 4, 2026
 Branch: `release/reviewed-core-2026-09-29`
-Commit: `dcb5014d29177769e61f7c8f2bdfe03382b7aee6` (`dcb5014`)
+Commit: `6d11751bee34fbcb5bb90c00c15df77e6a79fee7` (`6d11751`)
 Scope: Download Progress and Cancellation (Importance 3/5)
 
 ---
