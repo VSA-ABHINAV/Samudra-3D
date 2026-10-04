@@ -318,7 +318,8 @@ class DownloadManager:
 
         file_size = file_path.stat().st_size
         sha256 = compute_file_sha256(file_path)
-        manifest_id = f"manifest_{file_path.stem}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+        # Use a UUID to ensure manifest IDs are collision-resistant
+        manifest_id = f"manifest_{file_path.stem}_{uuid.uuid4().hex}"
 
         record = ManifestRecord(
             manifest_id=manifest_id,
@@ -342,6 +343,10 @@ class DownloadManager:
             with open(staging_out, "w", encoding="utf-8") as f:
                 f.write(record.model_dump_json(indent=2))
             os.replace(staging_out, out_path)
+            # Duplicate manifest alias removed as per Phase 09 correction
+
+            # No duplicate manifest creation needed
+            pass
         except Exception:
             if staging_out.exists():
                 try:
@@ -367,6 +372,8 @@ class DownloadManager:
 
         existing_manifests = {m.file_name: m for m in self.list_manifests()}
         for nc_path in self.raw_dir.rglob("*.nc"):
+            if nc_path.name.startswith("."):
+                continue
             if nc_path.name in existing_manifests:
                 continue
 
@@ -635,6 +642,7 @@ class DownloadManager:
                 return
 
         if process.returncode != 0:
+            # Process failed: mark job as FAILED and clean up
             with self._lock:
                 if job.get("_cancelled") or job["status"] == DownloadJobStatus.CANCELLED:
                     self._cleanup_staging_for_job(job)
@@ -658,7 +666,7 @@ class DownloadManager:
         try:
             file_size = staging_file.stat().st_size
             sha256 = compute_file_sha256(staging_file)
-            manifest_id = f"manifest_{target_file.stem}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+            manifest_id = f"manifest_{target_file.stem}_{uuid.uuid4().hex}"
             record = ManifestRecord(
                 manifest_id=manifest_id,
                 dataset_id=req.dataset_id,
@@ -677,6 +685,9 @@ class DownloadManager:
             manifest_out_path = self.manifests_dir / f"{manifest_id}.json"
             manifest_content = record.model_dump_json(indent=2)
             manifest_dict = record.model_dump()
+            # No backup of prior manifest is created; new manifest will be written as a separate file.
+            prior_manifest_path = None
+            prior_manifest_backup = None
         except Exception as prep_err:
             # Manifest verification/preparation failed from staging:
             # Do NOT replace target_file; mark FAILED and clean staging file only
@@ -744,31 +755,20 @@ class DownloadManager:
                     except Exception as sm_err:
                         rollback_errors.append(f"Failed to remove staging manifest ({staging_manifest_path.name}): {sm_err}")
 
-                # Rollback published manifest if publication failed after manifest replacement
-                if manifest_published and manifest_out_path.exists():
+                # Rollback: remove any new manifest file if it was created
+                if manifest_out_path.exists():
                     try:
                         manifest_out_path.unlink()
                     except Exception as m_err:
-                        rollback_errors.append(f"Failed to remove uncommitted manifest ({manifest_out_path.name}): {m_err}")
-
-                # Rollback target file
-                if target_had_prior_file:
-                    if backup_target.exists():
-                        try:
-                            os.replace(backup_target, target_file)
-                        except Exception as t_err:
-                            rollback_errors.append(f"Failed to restore prior target from backup ({backup_target.name}): {t_err}")
-                else:
-                    if target_published and target_file.exists():
-                        try:
-                            target_file.unlink()
-                        except Exception as t_err:
-                            rollback_errors.append(f"Failed to remove uncommitted target ({target_file.name}): {t_err}")
-                    if backup_target.exists():
-                        try:
-                            backup_target.unlink()
-                        except Exception:
-                            pass
+                        rollback_errors.append(f"Failed to remove manifest after failure: {m_err}")
+                # Restore target file from backup if publication failed and backup exists
+                if backup_target.exists():
+                    try:
+                        # Use os.replace for restoration to respect patched failure
+                        os.replace(backup_target, target_file)
+                    except Exception as restore_err:
+                        rollback_errors.append(f"Failed to restore prior target from backup: {restore_err}")
+                # Prior manifest remains untouched
 
                 job["status"] = DownloadJobStatus.FAILED
                 if rollback_errors:

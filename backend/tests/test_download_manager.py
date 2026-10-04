@@ -799,6 +799,230 @@ class TestDownloadManager(unittest.TestCase):
             with download_manager._lock:
                 download_manager._jobs.pop(job_id, None)
 
+    def test_15c_manifest_partial_write_failure_during_commit(self):
+        """Tests that if a partial write occurs to staging manifest before an I/O error,
+        the temporary partial file is deleted, no canonical manifest is published, the
+        prior target remains intact, and the job reports FAILED."""
+        clean_name = "test_manifest_partial_fail.nc"
+        target_path = download_manager.raw_dir / clean_name
+        original_content = b"original_content_before_partial_manifest_fail"
+
+        with open(target_path, "wb") as f:
+            f.write(original_content)
+
+        orig_hash = compute_file_sha256(target_path)
+        job_id = "test_partial_manifest_fail_job"
+        staging_name = f".stage_{job_id}_{clean_name}"
+        staging_path = download_manager.raw_dir / staging_name
+
+        req = SubsetCommandRequest(
+            dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m",
+            start_date="2025-01-01",
+            end_date="2025-01-02",
+            output_filename=clean_name
+        )
+        resp = download_manager.generate_command(req)
+
+        with download_manager._lock:
+            download_manager._jobs[job_id] = {
+                "job_id": job_id,
+                "dataset_id": req.dataset_id,
+                "status": DownloadJobStatus.QUEUED,
+                "command": resp.command,
+                "target_file": str(target_path),
+                "part_file": str(staging_path),
+                "staging_file": str(staging_path),
+                "_exec_command": subprocess.list2cmdline([
+                    sys.executable, "-c",
+                    f"import pathlib; pathlib.Path(r'{staging_path}').write_bytes(b'new_download_content_staging')"
+                ]),
+                "bytes_downloaded": 0,
+                "estimated_bytes": 1000,
+                "progress_pct": 0.0,
+                "error": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": None,
+                "manifest": None,
+                "_process": None,
+                "_launching": False,
+                "_launch_event": threading.Event(),
+                "_cancelled": False
+            }
+
+        orig_open = open
+
+        class PartialWriteFile:
+            def __init__(self, real_file):
+                self._real = real_file
+
+            def write(self, s):
+                # Write first 10 characters then simulate disk failure
+                if len(s) > 10:
+                    self._real.write(s[:10])
+                    self._real.flush()
+                    raise IOError("Simulated disk full mid-write on manifest staging file")
+                return self._real.write(s)
+
+            def __enter__(self):
+                self._real.__enter__()
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                return self._real.__exit__(exc_type, exc_val, exc_tb)
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        def faulty_open(file, *args, **kwargs):
+            if isinstance(file, (str, Path)) and str(download_manager.manifests_dir) in str(file) and ".stage_manifest_" in str(file):
+                real_f = orig_open(file, *args, **kwargs)
+                return PartialWriteFile(real_f)
+            return orig_open(file, *args, **kwargs)
+
+        try:
+            with unittest.mock.patch("builtins.open", side_effect=faulty_open):
+                download_manager._run_job(job_id, req, resp)
+
+            # Target must be preserved intact
+            self.assertTrue(target_path.exists())
+            with open(target_path, "rb") as f:
+                self.assertEqual(f.read(), original_content)
+            self.assertEqual(compute_file_sha256(target_path), orig_hash)
+
+            # Staging dataset must be cleaned up
+            self.assertFalse(staging_path.exists())
+
+            # No partial staging manifest or canonical manifest should remain
+            leaked_manifests = list(download_manager.manifests_dir.glob(f"*{job_id}*"))
+            self.assertEqual(len(leaked_manifests), 0, "Partial manifest files must be removed on failure")
+
+            status = download_manager.get_job_status(job_id)
+            self.assertEqual(status.status, DownloadJobStatus.FAILED)
+            self.assertIn("Atomic publication failed", status.error)
+            self.assertIn("Simulated disk full mid-write", status.error)
+        finally:
+            if target_path.exists():
+                target_path.unlink()
+            if staging_path.exists():
+                staging_path.unlink()
+            for p in download_manager.manifests_dir.glob(f"*{job_id}*"):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+            for p in download_manager.manifests_dir.glob(f"manifest_{Path(clean_name).stem}*.json"):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+            with download_manager._lock:
+                download_manager._jobs.pop(job_id, None)
+
+    def test_16_prior_manifest_preserved_on_publication_failure(self):
+        """Tests that when a prior manifest exists for the target, a failure during the new manifest
+        publication does not delete or corrupt the existing target file or its manifest.
+        """
+        clean_name = "test_prior_manifest_preserve.nc"
+        target_path = download_manager.raw_dir / clean_name
+        original_content = b"original_target_bytes"
+
+        # Write original target file
+        with open(target_path, "wb") as f:
+            f.write(original_content)
+        orig_hash = compute_file_sha256(target_path)
+
+        # Create a prior manifest for this target
+        prior_manifest = download_manager.create_manifest(target_path)
+        prior_manifest_path = download_manager.manifests_dir / f"{prior_manifest.manifest_id}.json"
+        with open(prior_manifest_path, "rb") as f:
+            prior_manifest_bytes = f.read()
+
+        job_id = "test_prior_manifest_fail"
+        staging_name = f".stage_{job_id}_{clean_name}"
+        staging_path = download_manager.raw_dir / staging_name
+
+        req = SubsetCommandRequest(
+            dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m",
+            start_date="2025-01-01",
+            end_date="2025-01-02",
+            output_filename=clean_name,
+        )
+        resp = download_manager.generate_command(req)
+
+        # Insert job entry
+        with download_manager._lock:
+            download_manager._jobs[job_id] = {
+                "job_id": job_id,
+                "dataset_id": req.dataset_id,
+                "status": DownloadJobStatus.QUEUED,
+                "command": resp.command,
+                "target_file": str(target_path),
+                "part_file": str(staging_path),
+                "staging_file": str(staging_path),
+                "_exec_command": subprocess.list2cmdline([
+                    sys.executable, "-c",
+                    f"import pathlib; pathlib.Path(r'{staging_path}').write_bytes(b'new_content')"
+                ]),
+                "bytes_downloaded": 0,
+                "estimated_bytes": 1000,
+                "progress_pct": 0.0,
+                "error": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": None,
+                "manifest": None,
+                "_process": None,
+                "_launching": False,
+                "_launch_event": threading.Event(),
+                "_cancelled": False,
+            }
+
+        # Patch open to fail when writing a manifest (simulating disk write failure)
+        orig_open = open
+        def faulty_open(file, *args, **kwargs):
+            if isinstance(file, (str, Path)) and str(download_manager.manifests_dir) in str(file) and any(m in str(args) or m in str(kwargs) for m in ('w', 'wb', 'a')):
+                raise IOError("Simulated manifest write failure")
+            return orig_open(file, *args, **kwargs)
+
+        try:
+            with unittest.mock.patch("builtins.open", side_effect=faulty_open):
+                download_manager._run_job(job_id, req, resp)
+
+            # Verify target unchanged
+            self.assertTrue(target_path.exists())
+            with open(target_path, "rb") as f:
+                self.assertEqual(f.read(), original_content)
+            self.assertEqual(compute_file_sha256(target_path), orig_hash)
+
+            # Verify prior manifest unchanged and still present
+            self.assertTrue(prior_manifest_path.exists())
+            with open(prior_manifest_path, "rb") as f:
+                self.assertEqual(f.read(), prior_manifest_bytes)
+
+            # No new manifest should be published
+            manifest_files = list(download_manager.manifests_dir.glob(f"*{job_id}*"))
+            self.assertEqual(len(manifest_files), 0, "No new manifest should be left after failure")
+
+            status = download_manager.get_job_status(job_id)
+            self.assertEqual(status.status, DownloadJobStatus.FAILED)
+            self.assertIn("Atomic publication failed", status.error)
+        finally:
+            # Cleanup
+            if target_path.exists():
+                target_path.unlink()
+            if staging_path.exists():
+                staging_path.unlink()
+            # Remove any stray manifests (including prior)
+            if prior_manifest_path.exists():
+                prior_manifest_path.unlink()
+            for p in download_manager.manifests_dir.glob(f"*{job_id}*" ):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+            with download_manager._lock:
+                download_manager._jobs.pop(job_id, None)
+
+
     def test_16a_cancellation_racing_before_publish_lock(self):
         """Tests that if cancellation is requested right before the atomic commit block in _run_job, target is untouched and staging cleaned up."""
         clean_name = "test_cancel_before_pub_lock.nc"
@@ -934,6 +1158,119 @@ class TestDownloadManager(unittest.TestCase):
                 target_path.unlink()
             if staging_path.exists():
                 staging_path.unlink()
+            for p in download_manager.manifests_dir.glob(f"manifest_{Path(clean_name).stem}*.json"):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+            with download_manager._lock:
+                download_manager._jobs.pop(job_id, None)
+
+    def test_16c_dataset_replace_failure_preserves_prior_manifest_and_target(self):
+        """Tests that if manifest publication succeeds but dataset replacement fails,
+        the newly published manifest is rolled back/unlinked, the pre-existing target file
+        is restored from backup, and the pre-existing manifest remains intact."""
+        clean_name = "test_prior_mf_target_restore.nc"
+        target_path = download_manager.raw_dir / clean_name
+        original_content = b"original_sacred_target_bytes_prior"
+
+        # Write original target file
+        with open(target_path, "wb") as f:
+            f.write(original_content)
+        orig_hash = compute_file_sha256(target_path)
+
+        # Create prior manifest for this target
+        prior_manifest = download_manager.create_manifest(target_path)
+        prior_manifest_path = download_manager.manifests_dir / f"{prior_manifest.manifest_id}.json"
+        with open(prior_manifest_path, "rb") as f:
+            prior_manifest_bytes = f.read()
+
+        job_id = "test_pub_rollback_manifest_and_target"
+        staging_name = f".stage_{job_id}_{clean_name}"
+        staging_path = download_manager.raw_dir / staging_name
+
+        req = SubsetCommandRequest(
+            dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m",
+            start_date="2025-01-01",
+            end_date="2025-01-02",
+            output_filename=clean_name,
+        )
+        resp = download_manager.generate_command(req)
+
+        with download_manager._lock:
+            download_manager._jobs[job_id] = {
+                "job_id": job_id,
+                "dataset_id": req.dataset_id,
+                "status": DownloadJobStatus.QUEUED,
+                "command": resp.command,
+                "target_file": str(target_path),
+                "part_file": str(staging_path),
+                "staging_file": str(staging_path),
+                "_exec_command": subprocess.list2cmdline([
+                    sys.executable, "-c",
+                    f"import pathlib; pathlib.Path(r'{staging_path}').write_bytes(b'new_ocean_data_payload_staging')"
+                ]),
+                "bytes_downloaded": 0,
+                "estimated_bytes": 1000,
+                "progress_pct": 0.0,
+                "error": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": None,
+                "manifest": None,
+                "_process": None,
+                "_launching": False,
+                "_launch_event": threading.Event(),
+                "_cancelled": False,
+            }
+
+        real_replace = os.replace
+
+        def faulty_replace(src, dst):
+            # Allow manifest staging replace and backup restore replace
+            if str(download_manager.manifests_dir) in str(src) or str(download_manager.manifests_dir) in str(dst):
+                return real_replace(src, dst)
+            if ".backup_" in str(src):
+                return real_replace(src, dst)
+            # Fail on the initial staging_file -> target_file replace
+            raise PermissionError("Simulated write lock on dataset publication target")
+
+        try:
+            with unittest.mock.patch("os.replace", side_effect=faulty_replace):
+                download_manager._run_job(job_id, req, resp)
+
+            # Target must be restored and hold original content
+            self.assertTrue(target_path.exists())
+            with open(target_path, "rb") as f:
+                self.assertEqual(f.read(), original_content)
+            self.assertEqual(compute_file_sha256(target_path), orig_hash)
+
+            # Prior manifest must remain intact and valid
+            self.assertTrue(prior_manifest_path.exists())
+            with open(prior_manifest_path, "rb") as f:
+                self.assertEqual(f.read(), prior_manifest_bytes)
+
+            # Staging dataset must be cleaned up
+            self.assertFalse(staging_path.exists())
+
+            # No newly created manifest from this job should remain
+            leaked_manifests = list(download_manager.manifests_dir.glob(f"*{job_id}*"))
+            self.assertEqual(len(leaked_manifests), 0, "No new manifest should remain after publication failure")
+
+            status = download_manager.get_job_status(job_id)
+            self.assertEqual(status.status, DownloadJobStatus.FAILED)
+            self.assertIn("Atomic publication failed", status.error)
+        finally:
+            if target_path.exists():
+                target_path.unlink()
+            if staging_path.exists():
+                staging_path.unlink()
+            if prior_manifest_path.exists():
+                prior_manifest_path.unlink()
+            for p in download_manager.manifests_dir.glob(f"*{job_id}*"):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
             for p in download_manager.manifests_dir.glob(f"manifest_{Path(clean_name).stem}*.json"):
                 try:
                     p.unlink()

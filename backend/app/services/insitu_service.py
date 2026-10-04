@@ -249,16 +249,16 @@ class InsituDataService:
 
         # 2b. Scan real Argo files in SAMUDRA_DATA/raw/argo
         try:
-            from backend.app.data.argo_ingest import scan_argo_directory
-            real_argo_list = scan_argo_directory()
-            for item in real_argo_list:
+            argo_real = scan_argo_directory(self.real_sample_path.parent.parent / "raw" / "argo")
+            for item in argo_real:
                 pid = item.get("id")
-                if pid not in seen_ids:
-                    norm = self.normalize_profile(item, default_source_mode="REAL_LOCAL")
-                    if norm:
-                        self.real_profiles.append(norm)
-                        self._profiles_by_id[norm["id"]] = norm
-                        seen_ids.add(norm["id"])
+                if pid in seen_ids:
+                    continue
+                norm = self.normalize_profile(item, default_source_mode="REAL_LOCAL")
+                if norm:
+                    self.real_profiles.append(norm)
+                    self._profiles_by_id[norm["id"]] = norm
+                    seen_ids.add(norm["id"])
         except Exception:
             pass
 
@@ -283,33 +283,31 @@ class InsituDataService:
                     self._gliders_by_id[norm["id"]] = norm
                     self._profiles_by_id[norm["id"]] = norm
 
-        # 4b. Scan real Gliders in SAMUDRA_DATA/raw/glider
+        # 5b. Scan real Glider files in SAMUDRA_DATA/raw/glider – loads INCOIS buoy + REAL_LOCAL.
         try:
-            from backend.app.data.glider_ingest import scan_glider_directory
-            real_gliders_list = scan_glider_directory()
-            for item in real_gliders_list:
-                gid = item.get("id")
-                if gid not in self._gliders_by_id:
-                    norm = self.normalize_glider_transect(item, default_source_mode="REAL_LOCAL")
-                    if norm:
-                        self.real_gliders.append(norm)
-                        self._gliders_by_id[norm["id"]] = norm
-                        self._profiles_by_id[norm["id"]] = norm
+            glider_real = scan_glider_directory(self.real_sample_path.parent.parent / "raw" / "glider")
+            for item in glider_real:
+                norm = self.normalize_glider_transect(item, default_source_mode="REAL_LOCAL")
+                if norm:
+                    self.real_gliders.append(norm)
+                    self._gliders_by_id[norm["id"]] = norm
+                    self._profiles_by_id[norm["id"]] = norm
         except Exception:
             pass
 
-        # 5. Ingest INCOIS moored buoys and operational products
+        # 6. INCOIS OMNI buoys – loads INCOIS buoy + REAL_LOCAL.
         try:
             from backend.app.data.incois_ingest import scan_incois_directory
-            incois_buoys = scan_incois_directory()
-            for item in incois_buoys:
-                bid = item.get("id")
-                if bid not in seen_ids:
-                    norm = self.normalize_profile(item, default_source_mode="REAL_LOCAL")
-                    if norm:
-                        self.real_profiles.append(norm)
-                        self._profiles_by_id[norm["id"]] = norm
-                        seen_ids.add(norm["id"])
+            incois = scan_incois_directory()
+            for item in incois:
+                pid = item.get("id")
+                if pid in seen_ids:
+                    continue
+                norm = self.normalize_profile(item, default_source_mode="REAL_LOCAL")
+                if norm:
+                    self.real_profiles.append(norm)
+                    self._profiles_by_id[norm["id"]] = norm
+                    seen_ids.add(norm["id"])
         except Exception:
             pass
 
@@ -556,7 +554,7 @@ class InsituDataService:
             glider_count=glider_count,
             synthetic_count=synthetic_count,
             real_sample_count=real_count,
-            erddap_live_feed="INCOIS-DAC Live / Local Real In-situ Active (Argo GDAC + INCOIS OMNI Buoy Array)",
+            erddap_live_feed="OFFLINE_INTEGRATION_GAP",
             data_centre="INCOIS-DAC",
             timestamp=datetime.now(timezone.utc).isoformat()
         )

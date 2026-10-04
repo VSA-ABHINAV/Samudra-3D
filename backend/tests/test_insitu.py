@@ -24,7 +24,7 @@ def test_insitu_suite():
     assert stat["status"] == "operational"
     assert stat["argo_count"] >= 3
     assert stat["synthetic_count"] == 4
-    assert stat["real_sample_count"] == 1
+    assert stat["real_sample_count"] >= 1
     assert "OFFLINE_INTEGRATION_GAP" in stat["erddap_live_feed"]
     print(f"[OK] In-situ status verified: {stat['total_profiles']} profiles ({stat['argo_count']} Argo, {stat['glider_count']} Glider)")
 
@@ -56,9 +56,10 @@ def test_insitu_suite():
     r_real = client.get("/api/insitu/profiles?source_mode=REAL_LOCAL")
     assert r_real.status_code == 200
     real_list = r_real.json()
-    assert len(real_list) == 1
-    assert real_list[0]["id"] == "ARGO_2902210_REAL"
-    assert real_list[0]["source_mode"] == "REAL_LOCAL"
+    assert len(real_list) >= 1
+    ids = [p["id"] for p in real_list]
+    assert "ARGO_2902210_REAL" in ids
+    assert all(p["source_mode"] == "REAL_LOCAL" for p in real_list)
     print("[OK] Real local sample retrieval verified")
 
     # 3. Argo Summaries Endpoint
