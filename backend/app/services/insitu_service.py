@@ -18,6 +18,8 @@ from backend.app.schemas.insitu import (
     GliderWaypoint,
     GliderTransectSummary,
     GliderTransectDetail,
+    BuoySummary,
+    BuoyDetail,
     InsituStatusResponse,
     SensorRegistrationRequest
 )
@@ -55,6 +57,9 @@ class InsituDataService:
         self.synthetic_gliders: List[Dict[str, Any]] = []
         self.real_gliders: List[Dict[str, Any]] = []
         self._gliders_by_id: Dict[str, Dict[str, Any]] = {}
+
+        self.buoy_stations: List[Dict[str, Any]] = []
+        self._buoys_by_id: Dict[str, Dict[str, Any]] = {}
 
         self.load_observations()
         self.load_custom_sensors()
@@ -214,6 +219,70 @@ class InsituDataService:
             "source_mode": source_mode
         }
 
+    def normalize_buoy(self, raw: Dict[str, Any], default_source_mode: str = "REAL_LOCAL") -> Optional[Dict[str, Any]]:
+        """Normalizes INCOIS moored ocean buoy stations and thermistor chain profiles."""
+        buoy_id = raw.get("id")
+        lat = raw.get("lat")
+        lon = raw.get("lon")
+
+        if not buoy_id or lat is None or lon is None:
+            return None
+
+        if not self.is_in_domain(lat, lon):
+            return None
+
+        depths = raw.get("depths")
+        if not depths and "pressure" in raw:
+            depths = [round(p * PRESSURE_TO_DEPTH_FACTOR, 2) for p in raw["pressure"]]
+        if not depths:
+            depths = [0.5]
+
+        temps = raw.get("temperature", [])
+        sals = raw.get("salinity", [])
+        qc_flags = raw.get("qc_flags", [1] * len(depths))
+
+        qc_summary = self.compute_qc_summary(qc_flags)
+        metadata = dict(raw.get("metadata", {}))
+        source_mode = raw.get("source_mode") or metadata.get("source_mode", default_source_mode)
+        provenance_badge = raw.get("provenance_badge") or metadata.get("provenance_badge", "[REAL • INCOIS]")
+        provider = raw.get("provider") or metadata.get("provider", "INCOIS")
+
+        wmo_id = raw.get("wmo_id") or metadata.get("wmo_id")
+        if not wmo_id and "BUOY_" in buoy_id:
+            wmo_id = buoy_id.replace("INCOIS_BUOY_", "").replace("BUOY_", "")
+
+        surface_temp = raw.get("surface_temp") if raw.get("surface_temp") is not None else (temps[0] if temps else None)
+        surface_sal = raw.get("surface_salinity") if raw.get("surface_salinity") is not None else (sals[0] if sals else None)
+        max_depth = max(depths) if depths else 0.0
+
+        return {
+            "id": buoy_id,
+            "platform_type": "buoy",
+            "name": raw.get("name", f"INCOIS Buoy {buoy_id}"),
+            "wmo_id": str(wmo_id) if wmo_id is not None else None,
+            "lat": float(lat),
+            "lon": float(lon),
+            "timestamp": raw.get("timestamp", datetime.now(timezone.utc).isoformat()),
+            "depths": depths,
+            "temperature": temps,
+            "salinity": sals,
+            "qc_flags": qc_flags,
+            "qc_summary": qc_summary.model_dump(),
+            "max_depth": float(max_depth),
+            "num_levels": len(depths),
+            "surface_temp": surface_temp,
+            "surface_salinity": surface_sal,
+            "air_temperature": raw.get("air_temperature"),
+            "surface_pressure_hpa": raw.get("surface_pressure_hpa"),
+            "wind_speed_ms": raw.get("wind_speed_ms"),
+            "wind_direction_deg": raw.get("wind_direction_deg"),
+            "significant_wave_height_m": raw.get("significant_wave_height_m"),
+            "metadata": metadata,
+            "source_mode": source_mode,
+            "provenance_badge": provenance_badge,
+            "provider": provider
+        }
+
     def load_observations(self):
         """Loads and normalizes observation files (Argo floats, gliders, and INCOIS buoys)."""
         self.synthetic_profiles = []
@@ -223,6 +292,9 @@ class InsituDataService:
         self.synthetic_gliders = []
         self.real_gliders = []
         self._gliders_by_id = {}
+
+        self.buoy_stations = []
+        self._buoys_by_id = {}
         seen_ids = set()
 
         # 1. Load primary synthetic dataset (4 profiles for backward compatibility)
@@ -317,13 +389,14 @@ class InsituDataService:
             incois = scan_incois_directory(incois_dir)
             for item in incois:
                 pid = item.get("id")
-                if pid in seen_ids:
-                    continue
-                norm = self.normalize_profile(item, default_source_mode="REAL_LOCAL")
+                norm = self.normalize_buoy(item, default_source_mode="REAL_LOCAL")
                 if norm:
-                    self.real_profiles.append(norm)
-                    self._profiles_by_id[norm["id"]] = norm
-                    seen_ids.add(norm["id"])
+                    self.buoy_stations.append(norm)
+                    self._buoys_by_id[norm["id"]] = norm
+                    if pid not in seen_ids:
+                        self.real_profiles.append(norm)
+                        self._profiles_by_id[norm["id"]] = norm
+                        seen_ids.add(norm["id"])
         except Exception:
             pass
 
@@ -527,6 +600,40 @@ class InsituDataService:
         """Returns single glider transect detail by identifier."""
         return self._gliders_by_id.get(glider_id)
 
+    def get_buoy_stations(
+        self,
+        qc_filter: bool = False,
+        source_mode: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Returns supported INCOIS moored ocean buoy stations with latest observations."""
+        if source_mode == "SYNTHETIC":
+            return []
+
+        buoys = list(self.buoy_stations)
+        if source_mode and source_mode not in ("ALL", "REAL_LOCAL"):
+            buoys = [b for b in buoys if b.get("source_mode") == source_mode]
+        if qc_filter:
+            buoys = [b for b in buoys if b.get("qc_summary", {}).get("pass_rate_pct", 100) >= 90.0]
+        return buoys
+
+    def get_buoy_by_id(self, buoy_id: str) -> Optional[Dict[str, Any]]:
+        """Returns single buoy station details and depth series by identifier."""
+        if not buoy_id:
+            return None
+        if buoy_id in self._buoys_by_id:
+            return self._buoys_by_id[buoy_id]
+
+        bid_clean = buoy_id.strip()
+        bid_upper = bid_clean.upper()
+
+        for b in self._buoys_by_id.values():
+            if (b.get("id") or "").upper() == bid_upper:
+                return b
+            wmo = (b.get("wmo_id") or "").upper()
+            if wmo and (wmo == bid_upper or f"INCOIS_BUOY_{wmo}" == bid_upper or f"BUOY_{wmo}" == bid_upper):
+                return b
+        return None
+
     def get_profile_by_id(self, profile_id: str) -> Optional[Dict[str, Any]]:
         """Returns single profile or glider by identifier (supports exact ID, case-insensitive, and WMO ID)."""
         if not profile_id:
@@ -560,6 +667,7 @@ class InsituDataService:
         
         all_gliders = self.synthetic_gliders + self.real_gliders
         glider_count = len(all_gliders)
+        buoy_count = len(self.buoy_stations)
         synthetic_count = len(self.synthetic_profiles)
         real_count = len(self.real_profiles)
 
@@ -568,6 +676,7 @@ class InsituDataService:
             total_profiles=len(all_profs),
             argo_count=argo_count,
             glider_count=glider_count,
+            buoy_count=buoy_count,
             synthetic_count=synthetic_count,
             real_sample_count=real_count,
             erddap_live_feed="OFFLINE_INTEGRATION_GAP",

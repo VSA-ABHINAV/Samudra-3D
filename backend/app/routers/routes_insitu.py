@@ -9,6 +9,8 @@ from backend.app.schemas.insitu import (
     ArgoProfileDetail,
     GliderTransectSummary,
     GliderTransectDetail,
+    BuoySummary,
+    BuoyDetail,
     InsituStatusResponse,
     SensorRegistrationRequest
 )
@@ -16,11 +18,11 @@ from backend.app.services.insitu_service import insitu_service
 
 router = APIRouter(prefix="/api/insitu", tags=["In-situ Observations"])
 
-@router.get("/profiles", summary="Retrieve all normalized in-situ profiles (Argo & Gliders)")
+@router.get("/profiles", summary="Retrieve all normalized in-situ profiles (Argo & Gliders & Buoys)")
 def get_profiles(
-    platform_type: Optional[str] = Query(None, description="Filter by platform type: 'argo' or 'glider'"),
+    platform_type: Optional[str] = Query(None, description="Filter by platform type: 'argo', 'glider', or 'buoy'"),
     qc_filter: bool = Query(False, description="Filter out profiles/levels failing quality checks"),
-    source_mode: Optional[str] = Query(None, description="Filter by source provenance: 'SYNTHETIC' or 'REAL_LOCAL'")
+    source_mode: Optional[str] = Query(None, description="Filter by source provenance: 'SYNTHETIC', 'REAL_LOCAL', or 'ALL'")
 ):
     """
     Returns normalized in-situ observation profiles.
@@ -68,6 +70,25 @@ def get_glider_by_id(glider_id: str):
             detail=f"Glider mission '{glider_id}' not found"
         )
     return glider
+
+@router.get("/buoys", response_model=List[BuoySummary], summary="Retrieve supported moored ocean buoy stations")
+def get_buoy_stations(
+    qc_filter: bool = Query(False, description="Filter out buoy stations failing quality checks"),
+    source_mode: Optional[str] = Query(None, description="Filter by source provenance ('REAL_LOCAL', 'SYNTHETIC', or 'ALL')")
+):
+    """Returns supported INCOIS moored ocean buoy stations with latest observations and metadata."""
+    return insitu_service.get_buoy_stations(qc_filter=qc_filter, source_mode=source_mode)
+
+@router.get("/buoys/{buoy_id}", response_model=BuoyDetail, summary="Retrieve single moored buoy station details and depth series")
+def get_buoy_by_id(buoy_id: str):
+    """Returns full vertical thermistor depth series, meteorological measurements, and metadata for a specific buoy."""
+    buoy = insitu_service.get_buoy_by_id(buoy_id)
+    if not buoy or buoy.get("platform_type") != "buoy":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Moored buoy '{buoy_id}' not found"
+        )
+    return buoy
 
 @router.get("/status", response_model=InsituStatusResponse, summary="Retrieve in-situ ingestion telemetry & ERDDAP status")
 def get_insitu_status():

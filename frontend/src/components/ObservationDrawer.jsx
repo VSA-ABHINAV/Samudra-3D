@@ -10,6 +10,8 @@ export default function ObservationDrawer({
   onClose,
   argoFloats = [],
   gliderTransects = [],
+  buoyStations = [],
+  buoys = [],
   selectedPlatform = null,
   onSelectPlatform,
   onOpenProfile,
@@ -65,8 +67,29 @@ export default function ObservationDrawer({
       });
     }
 
+    // Moored Buoys
+    const activeBuoyList = buoyStations.length > 0 ? buoyStations : buoys;
+    for (const b of activeBuoyList) {
+      list.push({
+        id: b.id,
+        type: 'buoy',
+        typeLabel: 'Moored Buoy',
+        badge: b.provenance_badge || '[REAL • INCOIS]',
+        badgeClass: 'badge-buoy',
+        name: b.name || `INCOIS Buoy ${b.wmo_id || b.id}`,
+        wmoId: b.wmo_id || b.id,
+        lat: b.lat,
+        lon: b.lon,
+        timestamp: b.timestamp || '2025-01-04T00:00:00Z',
+        cycle: b.air_temperature !== undefined && b.air_temperature !== null ? `${b.air_temperature}°C Air` : 'Stationary',
+        depthRange: b.depths?.length ? `0 – ${Math.max(...b.depths).toFixed(0)}m` : (b.max_depth ? `0 – ${b.max_depth.toFixed(0)}m` : '0 – 500m'),
+        qcStatus: b.qc_summary?.pass_rate_pct ? `${b.qc_summary.pass_rate_pct}%` : 'PASSED',
+        raw: { ...b, platform_type: 'buoy' }
+      });
+    }
+
     return list;
-  }, [argoFloats, gliderTransects]);
+  }, [argoFloats, gliderTransects, buoyStations, buoys]);
 
   const filteredPlatforms = useMemo(() => {
     return combinedPlatforms.filter((p) => {
@@ -123,18 +146,15 @@ export default function ObservationDrawer({
 
         <div className="flex items-center gap-1.5">
           {['ALL', 'ARGO', 'GLIDER', 'BUOY'].map((f) => {
-            const isBuoy = f === 'BUOY';
             return (
               <button
                 key={f}
                 type="button"
-                className={`filter-chip-btn ${activeFilter === f ? 'active' : ''} ${isBuoy ? 'buoy-filter-btn' : ''}`}
+                className={`filter-chip-btn ${activeFilter === f ? 'active' : ''}`}
                 onClick={() => setActiveFilter(f)}
-                title={isBuoy ? 'Moored Buoy telemetry (unsupported in active API contract)' : undefined}
                 data-testid={`filter-${f.toLowerCase()}`}
               >
                 {f}
-                {isBuoy && <span className="ml-1 text-[9px] text-amber-400/90 font-normal">(UNSUPPORTED)</span>}
               </button>
             );
           })}
@@ -142,25 +162,7 @@ export default function ObservationDrawer({
       </div>
 
       <div className="drawer-content overflow-y-auto max-h-[calc(100vh-280px)] p-3 space-y-2.5">
-        {activeFilter === 'BUOY' ? (
-          <div className="unsupported-buoy-notice p-4 my-2 bg-amber-950/40 border border-amber-600/50 rounded text-center">
-            <span className="text-xl mb-1 block" aria-hidden="true">⚓</span>
-            <h4 className="font-mono text-xs font-bold text-amber-300 uppercase tracking-wide">
-              Moored Buoy Telemetry Unsupported
-            </h4>
-            <p className="text-[11px] text-slate-300 mt-2 leading-relaxed">
-              No moored buoy list, detail, or vertical profile contract exists in the active in-situ API service.
-              Autonomous fleet monitoring is currently operational for Argo floats and underwater gliders.
-            </p>
-            <button
-              type="button"
-              className="action-btn-secondary text-[11px] mt-3 px-3 py-1 bg-slate-800 hover:bg-slate-700 text-sky-300"
-              onClick={() => setActiveFilter('ALL')}
-            >
-              Reset Filter to All Platforms
-            </button>
-          </div>
-        ) : filteredPlatforms.length === 0 ? (
+        {filteredPlatforms.length === 0 ? (
           <div className="empty-state text-center py-8 text-xs text-slate-400">
             No observation platforms match the active filter.
           </div>
@@ -201,6 +203,34 @@ export default function ObservationDrawer({
                     <span className="text-slate-500">Time:</span> {p.timestamp.slice(0, 10)}
                   </div>
                 </div>
+
+                {((p.raw?.wind_speed_ms !== undefined && p.raw?.wind_speed_ms !== null) ||
+                  (p.raw?.air_temperature !== undefined && p.raw?.air_temperature !== null) ||
+                  (p.raw?.surface_pressure_hpa !== undefined && p.raw?.surface_pressure_hpa !== null) ||
+                  (p.raw?.significant_wave_height_m !== undefined && p.raw?.significant_wave_height_m !== null)) && (
+                  <div className="flex flex-wrap gap-1 mt-1.5 text-[10px] font-mono">
+                    {p.raw?.air_temperature !== undefined && p.raw?.air_temperature !== null && (
+                      <span className="px-1.5 py-0.5 rounded bg-sky-950/70 border border-sky-600/30 text-sky-300">
+                        Air: {p.raw.air_temperature}°C
+                      </span>
+                    )}
+                    {p.raw?.wind_speed_ms !== undefined && p.raw?.wind_speed_ms !== null && (
+                      <span className="px-1.5 py-0.5 rounded bg-teal-950/70 border border-teal-600/30 text-teal-300">
+                        Wind: {p.raw.wind_speed_ms} m/s
+                      </span>
+                    )}
+                    {p.raw?.surface_pressure_hpa !== undefined && p.raw?.surface_pressure_hpa !== null && (
+                      <span className="px-1.5 py-0.5 rounded bg-slate-800/80 border border-slate-700/50 text-slate-300">
+                        {p.raw.surface_pressure_hpa} hPa
+                      </span>
+                    )}
+                    {p.raw?.significant_wave_height_m !== undefined && p.raw?.significant_wave_height_m !== null && (
+                      <span className="px-1.5 py-0.5 rounded bg-indigo-950/70 border border-indigo-600/30 text-indigo-300">
+                        Wave: {p.raw.significant_wave_height_m}m
+                      </span>
+                    )}
+                  </div>
+                )}
 
                 <div className="card-actions flex items-center gap-2 mt-2 pt-2 border-t border-slate-800/80">
                   <button

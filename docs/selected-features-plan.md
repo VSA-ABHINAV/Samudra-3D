@@ -11,7 +11,7 @@ User decision: 28 September 2026. Implement all eight items from Codex's reviewe
 | Ocean cross-section workflow | 4/5 | Choose two coordinates and inspect a vertical cut through the ocean | Accepted after Codex Phase 07 review |
 | Observation-ID search | 3/5 | Search an Argo identifier and select/focus its actual platform | Accepted after Codex Phase 08 review |
 | Download progress/cancellation | 3/5 | Track dataset downloads through completion/failure and cancel running jobs | Accepted after Codex Phase 09 review |
-| Buoy observations | 2/5 | Browse supported buoy measurements using an explicit list/detail contract | Selected: Phase 10 |
+| Buoy observations | 2/5 | Browse supported buoy measurements using an explicit list/detail contract | Ready for Codex review (Phase 10) |
 | Saved locations and analyses | Excluded | Bookmark/reopen locations or analysis sessions | Do not implement; removal scope awaiting clarification |
 | Live external feeds | Excluded | Live cyclone tracks, fishing bulletins or telemetry feeds | Do not implement; removal scope awaiting clarification |
 

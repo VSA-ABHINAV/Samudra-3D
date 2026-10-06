@@ -39,8 +39,15 @@ export default function ProfileModal({
       ))
     )
   );
-  const isArgo = Boolean(
+  const isBuoy = Boolean(
     !isModel && (
+      explicitType === 'buoy' ||
+      explicitType === 'moored_buoy' ||
+      (!explicitType && !isGlider && Boolean(selectedFloat?.id?.includes('BUOY')))
+    )
+  );
+  const isArgo = Boolean(
+    !isModel && !isBuoy && (
       explicitType === 'argo' ||
       explicitType === 'sensor' ||
       (!explicitType && !isGlider && (
@@ -55,7 +62,7 @@ export default function ProfileModal({
     let ignore = false;
     setFetchedCollocation(null);
     if (selectedFloat && !isModel) {
-      if (!isGlider && !isArgo) return;
+      if (!isGlider && !isArgo && !isBuoy) return;
       const fetchPromise = isGlider
         ? fetchGliderCollocation(selectedFloat.id)
         : fetchProfileCollocation(selectedFloat.id);
@@ -73,7 +80,7 @@ export default function ProfileModal({
     return () => {
       ignore = true;
     };
-  }, [selectedFloat, isModel, isGlider, isArgo]);
+  }, [selectedFloat, isModel, isGlider, isArgo, isBuoy]);
 
   const activeCollocation = (selectedFloat && !isModel) ? (collocation || fetchedCollocation) : null;
 
@@ -502,10 +509,10 @@ export default function ProfileModal({
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span className="subtle-tag" style={{ background: isModel ? '#0284c7' : 'var(--field)', color: isModel ? '#fff' : 'var(--accent)', fontWeight: 700, fontSize: '10px' }}>
-                {isModel ? 'NUMERICAL MODEL PROFILE' : (isGlider ? 'GLIDER TRANSECT' : (isArgo ? 'ARGO FLOAT' : 'UNKNOWN PLATFORM'))}
+                {isModel ? 'NUMERICAL MODEL PROFILE' : (isGlider ? 'GLIDER TRANSECT' : (isBuoy ? 'MOORED BUOY' : (isArgo ? 'ARGO FLOAT' : 'UNKNOWN PLATFORM')))}
               </span>
               <span style={{ fontSize: '10px', color: 'var(--muted)', background: 'var(--field)', padding: '1px 5px', borderRadius: '3px' }}>
-                {isModel ? (selectedFloat.datasetName || 'Unavailable') : sourceMode}
+                {isModel ? (selectedFloat.datasetName || 'Unavailable') : (selectedFloat.provenance_badge || sourceMode)}
               </span>
               {isModel ? (
                 <span style={{ fontSize: '10px', color: '#38bdf8', background: 'var(--field)', padding: '1px 5px', borderRadius: '3px', fontWeight: 600 }}>
@@ -530,7 +537,7 @@ export default function ProfileModal({
             <h3 id="profile-heading" style={{ fontSize: '14px', fontWeight: 600, marginTop: '4px', color: 'var(--text)' }} data-testid="profile-title">
               {isModel
                 ? `Model Water Column Profile • ${formatFloatCoordinates(selectedFloat.lat, selectedFloat.lon)}`
-                : (selectedFloat?.mission_name || selectedFloat?.name || (isGlider ? `Glider ${selectedFloat?.id}` : (isArgo ? `Float ${wmoId}` : `Platform ${selectedFloat?.id}`)))}
+                : (selectedFloat?.mission_name || selectedFloat?.name || (isGlider ? `Glider ${selectedFloat?.id}` : (isBuoy ? `Buoy ${selectedFloat?.id}` : (isArgo ? `Float ${wmoId}` : `Platform ${selectedFloat?.id}`))))}
             </h3>
           </div>
           <button
@@ -557,7 +564,7 @@ export default function ProfileModal({
         {/* 2. Sensor Metadata Summary Grid */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '4px', fontSize: '10px', marginBottom: '8px' }}>
           <div style={{ background: 'var(--field)', padding: '4px 6px', borderRadius: '4px' }}>
-            <span style={{ color: 'var(--muted)', display: 'block' }}>{isModel ? 'Profile Type' : isGlider ? 'Platform / Mission' : 'WMO ID'}</span>
+            <span style={{ color: 'var(--muted)', display: 'block' }}>{isModel ? 'Profile Type' : isGlider ? 'Platform / Mission' : (isBuoy ? 'Station / WMO' : 'WMO ID')}</span>
             <strong data-testid={isModel ? 'model-type-val' : 'wmo-number-val'}>{isModel ? 'Numerical Column' : (selectedFloat.mission_name || wmoId)}</strong>
           </div>
           <div style={{ background: 'var(--field)', padding: '4px 6px', borderRadius: '4px' }}>
@@ -565,14 +572,44 @@ export default function ProfileModal({
             <strong data-testid="float-coords-val">{formatFloatCoordinates(selectedFloat.lat, selectedFloat.lon)}</strong>
           </div>
           <div style={{ background: 'var(--field)', padding: '4px 6px', borderRadius: '4px' }}>
-            <span style={{ color: 'var(--muted)', display: 'block' }}>{isModel ? 'Active Dataset' : 'Cycle / DAC'}</span>
-            <span>{isModel ? (selectedFloat.datasetName || 'Unavailable') : `#${cycleNumber} (${dataCentre})`}</span>
+            <span style={{ color: 'var(--muted)', display: 'block' }}>{isModel ? 'Active Dataset' : (isBuoy ? 'Provider' : 'Cycle / DAC')}</span>
+            <span>{isModel ? (selectedFloat.datasetName || 'Unavailable') : (isBuoy ? (selectedFloat.provider || selectedFloat.metadata?.institution || 'INCOIS') : `#${cycleNumber} (${dataCentre})`)}</span>
           </div>
           <div style={{ background: 'var(--field)', padding: '4px 6px', borderRadius: '4px' }}>
             <span style={{ color: 'var(--muted)', display: 'block' }}>{isModel ? 'Model Time' : 'Timestamp'}</span>
             <span style={{ fontFamily: 'monospace' }}>{selectedFloat.timestamp ? formatFloatDate(selectedFloat.timestamp) : 'Unavailable'}</span>
           </div>
         </div>
+
+        {/* Meteorological Parameters (when available on moored buoys) */}
+        {Boolean(
+          (selectedFloat.air_temperature !== undefined && selectedFloat.air_temperature !== null) ||
+          (selectedFloat.wind_speed_ms !== undefined && selectedFloat.wind_speed_ms !== null) ||
+          (selectedFloat.surface_pressure_hpa !== undefined && selectedFloat.surface_pressure_hpa !== null) ||
+          (selectedFloat.significant_wave_height_m !== undefined && selectedFloat.significant_wave_height_m !== null)
+        ) && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '4px', fontSize: '10px', marginBottom: '8px' }}>
+            <div style={{ background: 'var(--field)', padding: '4px 6px', borderRadius: '4px' }}>
+              <span style={{ color: 'var(--muted)', display: 'block' }}>Air Temp</span>
+              <strong style={{ color: '#38bdf8' }}>{selectedFloat.air_temperature !== null && selectedFloat.air_temperature !== undefined ? `${selectedFloat.air_temperature}°C` : 'N/A'}</strong>
+            </div>
+            <div style={{ background: 'var(--field)', padding: '4px 6px', borderRadius: '4px' }}>
+              <span style={{ color: 'var(--muted)', display: 'block' }}>Surface Pressure</span>
+              <span>{selectedFloat.surface_pressure_hpa !== null && selectedFloat.surface_pressure_hpa !== undefined ? `${selectedFloat.surface_pressure_hpa} hPa` : 'N/A'}</span>
+            </div>
+            <div style={{ background: 'var(--field)', padding: '4px 6px', borderRadius: '4px' }}>
+              <span style={{ color: 'var(--muted)', display: 'block' }}>Wind Speed/Dir</span>
+              <span>
+                {selectedFloat.wind_speed_ms !== null && selectedFloat.wind_speed_ms !== undefined ? `${selectedFloat.wind_speed_ms} m/s` : 'N/A'}
+                {selectedFloat.wind_direction_deg !== null && selectedFloat.wind_direction_deg !== undefined ? ` (${selectedFloat.wind_direction_deg}°)` : ''}
+              </span>
+            </div>
+            <div style={{ background: 'var(--field)', padding: '4px 6px', borderRadius: '4px' }}>
+              <span style={{ color: 'var(--muted)', display: 'block' }}>Significant Wave</span>
+              <span>{selectedFloat.significant_wave_height_m !== null && selectedFloat.significant_wave_height_m !== undefined ? `${selectedFloat.significant_wave_height_m}m` : 'N/A'}</span>
+            </div>
+          </div>
+        )}
 
       {/* 3. Variable Switching Tabs */}
       <div

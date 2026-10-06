@@ -589,6 +589,30 @@ export async function fetchGliderById(gliderId, signal = null) {
 }
 
 /**
+ * Retrieves supported moored ocean buoy stations.
+ */
+export async function fetchBuoyStations({ qc_filter = false, source_mode = null, signal = null } = {}) {
+  const params = new URLSearchParams();
+  if (qc_filter) params.set('qc_filter', 'true');
+  if (source_mode) params.set('source_mode', source_mode);
+
+  const qs = params.toString();
+  const url = `${API_BASE}/insitu/buoys${qs ? `?${qs}` : ''}`;
+  const res = await fetch(url, { signal });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch buoy stations: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Retrieves single detailed moored buoy station with thermistor depth series.
+ */
+export async function fetchBuoyDetail(buoyId, signal = null) {
+  return requestJson(`${API_BASE}/insitu/buoys/${encodeURIComponent(buoyId)}`, { signal });
+}
+
+/**
  * Retrieves co-located 4D model profile and bias analytics for a given sensor profile.
  */
 export async function fetchProfileCollocation(profileId, { time_strategy = 'linear', signal = null } = {}) {

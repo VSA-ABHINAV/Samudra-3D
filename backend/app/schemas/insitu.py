@@ -114,11 +114,61 @@ class GliderTransectDetail(BaseModel):
     metadata: Dict[str, Any]
     source_mode: str = "SYNTHETIC"
 
+class BuoySummary(BaseModel):
+    id: str
+    platform_type: str = "buoy"
+    name: str
+    wmo_id: Optional[str] = None
+    lat: float
+    lon: float
+    timestamp: str
+    max_depth: float
+    num_levels: int
+    surface_temp: Optional[float] = None
+    surface_salinity: Optional[float] = None
+    air_temperature: Optional[float] = None
+    surface_pressure_hpa: Optional[float] = None
+    wind_speed_ms: Optional[float] = None
+    wind_direction_deg: Optional[float] = None
+    significant_wave_height_m: Optional[float] = None
+    qc_summary: QCFlagSummary
+    source_mode: str = "REAL_LOCAL"
+    provenance_badge: str = "[REAL • INCOIS]"
+    provider: str = "INCOIS"
+
+class BuoyDetail(BaseModel):
+    id: str
+    platform_type: str = "buoy"
+    name: str
+    wmo_id: Optional[str] = None
+    lat: float
+    lon: float
+    timestamp: str
+    max_depth: float
+    num_levels: int
+    surface_temp: Optional[float] = None
+    surface_salinity: Optional[float] = None
+    air_temperature: Optional[float] = None
+    surface_pressure_hpa: Optional[float] = None
+    wind_speed_ms: Optional[float] = None
+    wind_direction_deg: Optional[float] = None
+    significant_wave_height_m: Optional[float] = None
+    depths: List[float]
+    temperature: List[float]
+    salinity: List[float]
+    qc_flags: List[int]
+    qc_summary: QCFlagSummary
+    metadata: Dict[str, Any]
+    source_mode: str = "REAL_LOCAL"
+    provenance_badge: str = "[REAL • INCOIS]"
+    provider: str = "INCOIS"
+
 class InsituStatusResponse(BaseModel):
     status: str = "operational"
     total_profiles: int
     argo_count: int
     glider_count: int
+    buoy_count: int = 0
     synthetic_count: int
     real_sample_count: int
     erddap_live_feed: str

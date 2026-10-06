@@ -2202,6 +2202,11 @@ input:-webkit-autofill:focus {
   border: 1px solid #c084fc;
   color: #c084fc;
 }
+.badge-buoy {
+  background: rgba(20, 184, 166, 0.2);
+  border: 1px solid #2dd4bf;
+  color: #2dd4bf;
+}
 .badge-synthetic {
   font-size: 10px;
   font-family: monospace;

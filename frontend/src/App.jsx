@@ -26,6 +26,8 @@ import {
   fetchArgoFloatById,
   fetchGliderTransects,
   fetchGliderById,
+  fetchBuoyStations,
+  fetchBuoyDetail,
   fetchCurrentUser,
   logoutUser,
   fetchCustomSensors,
@@ -82,6 +84,7 @@ export default function App() {
   const [showGliders, setShowGliders] = useState(false);
   const [gliderTransects, setGliderTransects] = useState([]);
   const [selectedGlider, setSelectedGlider] = useState(null);
+  const [buoyStations, setBuoyStations] = useState([]);
 
   // 3D Difference Field & Anomaly Heatmap state
   const [showAnomalyField, setShowAnomalyField] = useState(false);
@@ -750,7 +753,12 @@ export default function App() {
       setSelectedFloat(floatOrSummary);
       setIsPlatformLoading(true);
       setPlatformLoadError(null);
-      fetchArgoFloatById(floatOrSummary.id)
+      const isBuoyPlatform = floatOrSummary.platform_type === 'buoy' || (typeof floatOrSummary.id === 'string' && floatOrSummary.id.startsWith('INCOIS_BUOY_'));
+      const fetchDetailPromise = isBuoyPlatform
+        ? fetchBuoyDetail(floatOrSummary.id)
+        : fetchArgoFloatById(floatOrSummary.id);
+
+      fetchDetailPromise
         .then((detail) => {
           if (selectionRequestIdRef.current === reqId) {
             setSelectedFloat(detail);
@@ -760,8 +768,8 @@ export default function App() {
         })
         .catch((err) => {
           if (selectionRequestIdRef.current === reqId) {
-            console.warn('Could not fetch detailed float profile:', err);
-            setPlatformLoadError(err.message || 'Failed to load float profile');
+            console.warn('Could not fetch detailed platform profile:', err);
+            setPlatformLoadError(err.message || 'Failed to load platform profile');
             setIsPlatformLoading(false);
           }
         });
@@ -1049,6 +1057,26 @@ export default function App() {
       ignore = true;
     };
   }, [showGliders, isObservationDrawerOpen, insituSourceMode]);
+
+  // Load Moored Buoys when drawer is open
+  useEffect(() => {
+    if (!isObservationDrawerOpen) return;
+
+    let ignore = false;
+    fetchBuoyStations({ source_mode: insituSourceMode })
+      .then((data) => {
+        if (!ignore && data) {
+          setBuoyStations(data);
+        }
+      })
+      .catch((err) => {
+        console.warn('Could not fetch buoy stations:', err);
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [isObservationDrawerOpen, insituSourceMode]);
 
   const handleSelectVariable = useCallback((varId) => {
     setSelectedVariable(varId);
@@ -1641,6 +1669,7 @@ export default function App() {
           onClose={() => setIsObservationDrawerOpen(false)}
           argoFloats={argoFloats}
           gliderTransects={gliderTransects}
+          buoyStations={buoyStations}
           selectedPlatform={selectedFloat}
           onSelectPlatform={(raw) => {
             const explicit = raw?.platform_type || raw?.type;
@@ -1664,6 +1693,7 @@ export default function App() {
           onOpenComparison={(p) => {
             const explicit = p?.platform_type || p?.type;
             const isGliderRaw = explicit === 'glider' || (!explicit && ((Array.isArray(p?.waypoints) && p.waypoints.length > 0) || Boolean(p?.mission_name)));
+            const isBuoyRaw = explicit === 'buoy';
             if (isGliderRaw) {
               handleSelectGlider(p);
             } else {
@@ -1673,7 +1703,7 @@ export default function App() {
               isAvailable: true,
               source: 'fleet',
               platformId: p?.id,
-              platformType: isGliderRaw ? 'glider' : 'argo'
+              platformType: isGliderRaw ? 'glider' : (isBuoyRaw ? 'buoy' : 'argo')
             });
             setIsComparisonOpen(true);
           }}
