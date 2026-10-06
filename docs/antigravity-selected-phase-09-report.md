@@ -2,9 +2,9 @@
 
 ## Status: READY FOR CODEX REVIEW
 
-Date: October 4, 2026
+Date: October 6, 2026
 Branch: `release/reviewed-core-2026-09-29`
-Commit: `f1cb153`
+Commit: `3a932a98e12abc90405057e0ac11e05e94662792`
 Scope: Download Progress and Cancellation (Importance 3/5)
 
 ---
