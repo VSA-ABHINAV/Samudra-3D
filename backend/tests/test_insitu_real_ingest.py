@@ -114,6 +114,107 @@ class TestInsituRealIngest(unittest.TestCase):
         expected_count = len(synth_profiles) + len(real_profiles) + len(insitu_service.custom_profiles)
         self.assertEqual(len(all_profiles), expected_count)
 
+    def test_06_configured_raw_data_dir_ingestion(self):
+        """Tests that Argo and Glider files in configured raw_data_dir (both singular and plural conventions) are ingested."""
+        import tempfile
+        import json
+        from backend.app.services.insitu_service import InsituDataService
+
+        # 1. Test singular convention (argo/ and glider/)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_root = Path(tmpdir)
+            argo_dir = raw_root / "argo"
+            glider_dir = raw_root / "glider"
+            argo_dir.mkdir(parents=True)
+            glider_dir.mkdir(parents=True)
+
+            raw_argo_data = {
+                "id": "ARGO_TEST_RAW_999001",
+                "platform_type": "argo",
+                "lat": 12.5,
+                "lon": 82.5,
+                "timestamp": "2026-09-01T12:00:00Z",
+                "depths": [0.0, 10.0, 50.0, 100.0],
+                "temperature": [28.5, 28.2, 27.0, 24.5],
+                "salinity": [34.5, 34.6, 34.8, 35.0],
+                "qc_flags": [1, 1, 1, 1],
+                "metadata": {"wmo_id": "999001", "source": "Raw GDAC Feed"}
+            }
+            with open(argo_dir / "argo_999001.json", "w", encoding="utf-8") as f:
+                json.dump(raw_argo_data, f)
+
+            raw_glider_data = {
+                "id": "GLIDER_TEST_RAW_SG99",
+                "platform_type": "glider",
+                "mission_name": "Bay of Bengal Deep Transect",
+                "lat": 13.0,
+                "lon": 84.0,
+                "timestamp": "2026-09-01T00:00:00Z",
+                "waypoints": [
+                    {"lat": 13.0, "lon": 84.0, "depth": 0.0, "temperature": 28.5, "salinity": 34.5, "qc_flag": 1},
+                    {"lat": 13.2, "lon": 84.2, "depth": 500.0, "temperature": 15.0, "salinity": 35.0, "qc_flag": 1}
+                ],
+                "metadata": {"glider_model": "Seaglider"}
+            }
+            with open(glider_dir / "glider_sg99.json", "w", encoding="utf-8") as f:
+                json.dump(raw_glider_data, f)
+
+            service = InsituDataService(raw_data_dir=raw_root)
+            argo_found = service.get_profile_by_id("ARGO_TEST_RAW_999001")
+            self.assertIsNotNone(argo_found, "Raw Argo profile in configured raw_data_dir should be ingested")
+            self.assertEqual(argo_found["source_mode"], "REAL_LOCAL")
+            self.assertEqual(argo_found["wmo_id"], "999001")
+
+            glider_found = service.get_glider_by_id("GLIDER_TEST_RAW_SG99")
+            self.assertIsNotNone(glider_found, "Raw Glider in configured raw_data_dir should be ingested")
+            self.assertEqual(glider_found["source_mode"], "REAL_LOCAL")
+
+        # 2. Test plural directory convention (argos/ and gliders/)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_root = Path(tmpdir)
+            (raw_root / "argos").mkdir(parents=True)
+            (raw_root / "gliders").mkdir(parents=True)
+
+            with open(raw_root / "argos" / "argo_999002.json", "w", encoding="utf-8") as f:
+                json.dump({
+                    "id": "ARGO_TEST_RAW_999002",
+                    "lat": 15.0,
+                    "lon": 72.0,
+                    "depths": [0.0, 50.0],
+                    "temperature": [29.0, 27.0],
+                    "salinity": [35.5, 35.8],
+                    "qc_flags": [1, 1]
+                }, f)
+
+            with open(raw_root / "gliders" / "glider_sg98.json", "w", encoding="utf-8") as f:
+                json.dump({
+                    "id": "GLIDER_TEST_RAW_SG98",
+                    "lat": 16.0,
+                    "lon": 71.0,
+                    "waypoints": [{"lat": 16.0, "lon": 71.0, "depth": 0.0, "qc_flag": 1}]
+                }, f)
+
+            service_plural = InsituDataService(raw_data_dir=raw_root)
+            self.assertIsNotNone(service_plural.get_profile_by_id("ARGO_TEST_RAW_999002"))
+            self.assertIsNotNone(service_plural.get_glider_by_id("GLIDER_TEST_RAW_SG98"))
+
+    def test_07_unset_raw_data_dir_no_fallback(self):
+        """Tests that an unset/missing raw-data root is handled safely and does not perform package-relative fallback scans."""
+        import tempfile
+        from unittest.mock import patch
+        from backend.app.services.insitu_service import InsituDataService
+        from backend.app.core.config import settings
+
+        with patch.object(settings, "RAW_DATA_DIR", None):
+            service = InsituDataService(raw_data_dir=None)
+            # Service should initialize safely without error
+            self.assertGreater(len(service.synthetic_profiles), 0)
+            self.assertGreater(len(service.real_profiles), 0)  # Contains baseline real_argo_sample & INCOIS buoys
+            self.assertGreater(len(service.synthetic_gliders), 0)
+
+            # Ensure no nonexistent IDs are present
+            self.assertIsNone(service.get_profile_by_id("NONEXISTENT_FLOAT"))
+
 
 if __name__ == "__main__":
     unittest.main()

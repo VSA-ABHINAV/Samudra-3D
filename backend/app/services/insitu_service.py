@@ -21,6 +21,8 @@ from backend.app.schemas.insitu import (
     InsituStatusResponse,
     SensorRegistrationRequest
 )
+from backend.app.data.argo_ingest import scan_argo_directory
+from backend.app.data.glider_ingest import scan_glider_directory
 
 # Standard Indian Ocean domain bounds
 DOMAIN_LAT_MIN = -30.0
@@ -36,12 +38,14 @@ class InsituDataService:
         argo_path: Path = settings.ARGO_PATH,
         real_sample_path: Path = settings.SAMPLE_DATA_DIR / "real_argo_sample.json",
         glider_path: Path = settings.SAMPLE_DATA_DIR / "glider_transects.json",
-        real_glider_path: Path = settings.SAMPLE_DATA_DIR / "real_glider_sample.json"
+        real_glider_path: Path = settings.SAMPLE_DATA_DIR / "real_glider_sample.json",
+        raw_data_dir: Optional[Path] = None
     ):
         self.argo_path = argo_path
         self.real_sample_path = real_sample_path
         self.glider_path = glider_path
         self.real_glider_path = real_glider_path
+        self._raw_data_dir = raw_data_dir
 
         self.synthetic_profiles: List[Dict[str, Any]] = []
         self.real_profiles: List[Dict[str, Any]] = []
@@ -247,18 +251,23 @@ class InsituDataService:
                         self._profiles_by_id[norm["id"]] = norm
                         seen_ids.add(norm["id"])
 
-        # 2b. Scan real Argo files in SAMUDRA_DATA/raw/argo
+        # 2b. Scan real Argo files in configured SAMUDRA_DATA_ROOT/raw/argo
         try:
-            argo_real = scan_argo_directory(self.real_sample_path.parent.parent / "raw" / "argo")
-            for item in argo_real:
-                pid = item.get("id")
-                if pid in seen_ids:
-                    continue
-                norm = self.normalize_profile(item, default_source_mode="REAL_LOCAL")
-                if norm:
-                    self.real_profiles.append(norm)
-                    self._profiles_by_id[norm["id"]] = norm
-                    seen_ids.add(norm["id"])
+            raw_root = self._raw_data_dir if self._raw_data_dir is not None else settings.RAW_DATA_DIR
+            if raw_root:
+                argo_dir = raw_root / "argo"
+                if not argo_dir.exists() and (raw_root / "argos").exists():
+                    argo_dir = raw_root / "argos"
+                argo_real = scan_argo_directory(argo_dir)
+                for item in argo_real:
+                    pid = item.get("id")
+                    if pid in seen_ids:
+                        continue
+                    norm = self.normalize_profile(item, default_source_mode="REAL_LOCAL")
+                    if norm:
+                        self.real_profiles.append(norm)
+                        self._profiles_by_id[norm["id"]] = norm
+                        seen_ids.add(norm["id"])
         except Exception:
             pass
 
@@ -283,22 +292,29 @@ class InsituDataService:
                     self._gliders_by_id[norm["id"]] = norm
                     self._profiles_by_id[norm["id"]] = norm
 
-        # 5b. Scan real Glider files in SAMUDRA_DATA/raw/glider – loads INCOIS buoy + REAL_LOCAL.
+        # 5b. Scan real Glider files in configured SAMUDRA_DATA_ROOT/raw/glider
         try:
-            glider_real = scan_glider_directory(self.real_sample_path.parent.parent / "raw" / "glider")
-            for item in glider_real:
-                norm = self.normalize_glider_transect(item, default_source_mode="REAL_LOCAL")
-                if norm:
-                    self.real_gliders.append(norm)
-                    self._gliders_by_id[norm["id"]] = norm
-                    self._profiles_by_id[norm["id"]] = norm
+            raw_root = self._raw_data_dir if self._raw_data_dir is not None else settings.RAW_DATA_DIR
+            if raw_root:
+                glider_dir = raw_root / "glider"
+                if not glider_dir.exists() and (raw_root / "gliders").exists():
+                    glider_dir = raw_root / "gliders"
+                glider_real = scan_glider_directory(glider_dir)
+                for item in glider_real:
+                    norm = self.normalize_glider_transect(item, default_source_mode="REAL_LOCAL")
+                    if norm:
+                        self.real_gliders.append(norm)
+                        self._gliders_by_id[norm["id"]] = norm
+                        self._profiles_by_id[norm["id"]] = norm
         except Exception:
             pass
 
         # 6. INCOIS OMNI buoys – loads INCOIS buoy + REAL_LOCAL.
         try:
             from backend.app.data.incois_ingest import scan_incois_directory
-            incois = scan_incois_directory()
+            raw_root = self._raw_data_dir if self._raw_data_dir is not None else settings.RAW_DATA_DIR
+            incois_dir = (raw_root / "incois") if raw_root else None
+            incois = scan_incois_directory(incois_dir)
             for item in incois:
                 pid = item.get("id")
                 if pid in seen_ids:

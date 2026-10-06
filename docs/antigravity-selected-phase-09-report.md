@@ -49,6 +49,12 @@ Selected Phase 09 implements atomic chunked dataset download progress monitoring
    - If cancellation is unconfirmed or fails, the client does not synthesize a fake `CANCELLED` status, displays an error alert to the user, and leaves the job intact for background status polling recovery.
    - Verified in Playwright test `TC-P09-08`.
 
+8. **Configured Raw Data Root Discovery & Safe Handling (`backend/app/services/insitu_service.py` & `backend/tests/test_insitu_real_ingest.py`)**:
+   - In `insitu_service.py`, corrected Argo and glider discovery to use the configured `settings.RAW_DATA_DIR` (or constructor `raw_data_dir`) supporting both singular and plural conventions (`argo`/`argos` and `glider`/`gliders`).
+   - Removed package-relative path calculations (`self.real_sample_path.parent.parent / "raw"`), preventing scans outside configured roots.
+   - Handled unset/missing `RAW_DATA_DIR` safely without exceptions or fallback scans.
+   - Verified in `test_insitu_real_ingest.py` (`test_06_configured_raw_data_dir_ingestion` and `test_07_unset_raw_data_dir_no_fallback`).
+
 ---
 
 ## 2. Modified & Created Files
@@ -57,8 +63,9 @@ Selected Phase 09 implements atomic chunked dataset download progress monitoring
 |---|---|---|
 | `backend/app/data/download_manager.py` | Modified | Added unique staging output path, UUID-based collision-resistant manifest IDs, transactional staging manifest publication, rollback-safe backup & commit boundary with rollback failure surfacing, dotfile filter in scan_and_catalog, staging-only progress sampling, launch-registration synchronization, cross-platform process tree termination, and failure surfacing |
 | `backend/app/routers/datasets.py` | Modified | Handled `cancel_job` process termination exceptions with HTTP 500 error reporting |
-| `backend/app/services/insitu_service.py` | Modified | Preserved local Argo, glider, and INCOIS data discovery with OFFLINE_INTEGRATION_GAP feed label |
+| `backend/app/services/insitu_service.py` | Modified | Fixed raw data discovery to respect configured `RAW_DATA_DIR`/`raw_data_dir` and singular/plural folder conventions without package-relative fallback scans |
 | `backend/tests/test_download_manager.py` | Modified | Comprehensive suite of 25 unit/contract tests covering process tree termination, launch race sync, termination failure handling, manifest write failure target restoration, rollback restoration failure and backup preservation, partial-write failure handling, prior manifest preservation on dataset publication failure, publish boundary cancellation races, atomic staging publish, and staging progress isolation |
+| `backend/tests/test_insitu_real_ingest.py` | Modified | Added deterministic tests for configured raw directory ingestion (singular & plural) and unset raw directory safe handling |
 | `backend/tests/test_insitu.py` | Modified | Stabilized real sample count assertions for test robustness |
 | `frontend/src/services/api.js` | Modified | Verified download start, status, and cancel service calls with error extraction |
 | `frontend/src/App.jsx` | Modified | Added persistent active download job state, background polling interval, and applied-sequence response guarding across modal views |
@@ -85,24 +92,24 @@ The following screenshots were captured during verification:
 ## 4. Verification Gate Results
 
 ### 1. Frontend Lint
-Command: `npm.cmd run lint` (in `frontend/`)
+Command: `npm run lint` (in `frontend/`)
 Result: **PASSED (0 errors, 0 warnings)**
 
 ### 2. Frontend Production Build
-Command: `npm.cmd run build` (in `frontend/`)
-Result: **PASSED (built in 4.52s, 0 errors)**
+Command: `npm run build` (in `frontend/`)
+Result: **PASSED (built in 3.57s, 0 errors)**
 
 ### 3. Transition Queue Unit Test
 Command: `node tests/transitionQueue.test.js` (in `frontend/`)
-Result: **PASSED (2/2 tests pass in 18.8ms)**
+Result: **PASSED (2/2 tests pass in 17.8ms)**
 
 ### 4. Backend Unit & Contract Tests
-Command: `python -m pytest backend/tests/ -v` (from repo root)
-Result: **PASSED (100 passed, 2 skipped in 17.93s)**
+Command: `python -m unittest discover -s backend/tests -p "test_*.py"` (from repo root)
+Result: **PASSED (103 passed, 2 skipped in 11.52s)**
 
-### 5. Combined Playwright Test Suite
+### 5. Playwright Test Suite
 Command: `npx playwright test tests/selected-phase-09.spec.js` (in `frontend/`)
-Result: **PASSED (8/8 tests pass in 41.2s)**
+Result: **PASSED (8/8 tests pass in 37.8s)**
 
 ### 6. Git Diff Whitespace & Syntax Check
 Command: `git diff --check` (from repo root)
@@ -113,6 +120,6 @@ Result: **PASSED (0 issues)**
 ## 5. Scope Boundaries & Constraints
 
 - No external network downloads or live Copernicus requests were invoked in tests or mocks.
-- No buoy observation features or unrelated tabs in DatasetManagerModal were modified.
+- Phase 10 (Buoy observations) was NOT started; moored buoy contracts remain intact without scope creep.
 - No push or deployment was performed.
 - Status is strictly marked `READY FOR CODEX REVIEW`.
