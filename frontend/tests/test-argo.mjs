@@ -92,7 +92,7 @@ assert.equal(formatFloatDate('2026-09-10T12:00:00Z'), '2026-09-10 12:00:00 UTC')
 console.log('✓ 4. Geographic coordinates and timestamp formatting verified');
 
 // -----------------------------------------------------------------------------
-// 5. Marker Three.js Hierarchy & Visual Highlighting
+// 5. Marker Three.js Hierarchy, 3D Mesh Integrity & Anti-Regression Assertions
 // -----------------------------------------------------------------------------
 const mockFloat = {
   id: 'ARGO_2902145',
@@ -110,11 +110,33 @@ assert.ok(markerGroup instanceof THREE.Group);
 assert.equal(markerGroup.name, 'argo-marker-ARGO_2902145');
 assert.equal(markerGroup.userData.id, 'ARGO_2902145');
 
+// Anti-regression: Ensure marker NEVER uses THREE.Sprite or screen-space unattenuated quads
+let spriteCount = 0;
+let meshCount = 0;
+markerGroup.traverse((child) => {
+  if (child instanceof THREE.Sprite || child.isSprite) {
+    spriteCount++;
+  }
+  if (child instanceof THREE.Mesh || child.isMesh) {
+    meshCount++;
+  }
+});
+assert.equal(spriteCount, 0, 'Argo marker must NOT contain any THREE.Sprite objects');
+assert.ok(meshCount >= 4, 'Argo marker must contain at least 4 bounded 3D meshes (stem, beacon, ring, glow)');
+
 const beacon = markerGroup.getObjectByName('beacon');
 assert.ok(beacon, 'Marker must contain beacon mesh');
+assert.ok(beacon.geometry instanceof THREE.SphereGeometry, 'Beacon must use 3D SphereGeometry');
+assert.equal(beacon.geometry.parameters.radius, 1.2, 'Beacon sphere radius must be 1.2 units');
+
 const ring = markerGroup.getObjectByName('selection-ring');
 assert.ok(ring, 'Marker must contain selection ring mesh');
+assert.ok(ring.geometry instanceof THREE.RingGeometry, 'Selection ring must use 3D RingGeometry');
 assert.equal(ring.visible, false, 'Selection ring must be hidden when not selected');
+
+const glow = markerGroup.getObjectByName('glow');
+assert.ok(glow, 'Marker must contain glow mesh');
+assert.ok(glow.geometry instanceof THREE.SphereGeometry, 'Glow must use 3D SphereGeometry');
 
 // Test selecting marker
 const markersContainer = new THREE.Group();
@@ -124,6 +146,13 @@ updateMarkerSelectionVisuals(markersContainer, 'ARGO_2902145');
 assert.equal(ring.visible, true, 'Selection ring must become visible when selected');
 assert.equal(beacon.scale.x, 1.35, 'Beacon must scale up when selected');
 
+// Re-verify no sprites introduced upon selection
+let selectedSpriteCount = 0;
+markerGroup.traverse((child) => {
+  if (child instanceof THREE.Sprite || child.isSprite) selectedSpriteCount++;
+});
+assert.equal(selectedSpriteCount, 0, 'Selected Argo marker must NOT contain any THREE.Sprite objects');
+
 // Test deselecting marker
 updateMarkerSelectionVisuals(markersContainer, null);
 assert.equal(ring.visible, false, 'Selection ring must hide when deselected');
@@ -132,6 +161,6 @@ assert.equal(beacon.scale.x, 1.0, 'Beacon scale must return to 1.0');
 // Test cleanup
 disposeArgoMarkers(markersContainer);
 assert.equal(markersContainer.children.length, 0, 'disposeArgoMarkers must remove all children');
-console.log('✓ 5. Three.js marker creation, selection highlighting, and resource disposal verified');
+console.log('✓ 5. Three.js 3D mesh structure, anti-sprite regression, selection highlighting, and resource disposal verified');
 
 console.log('\nALL ARGO FLOAT TESTS PASSED (100%)\n');

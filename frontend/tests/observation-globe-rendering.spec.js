@@ -88,6 +88,75 @@ const sampleGliderTransects = [
   }
 ];
 
+import * as THREE from 'three';
+import {
+  createArgoMarker,
+  updateMarkerSelectionVisuals,
+  disposeArgoMarkers
+} from '../src/utils/argoProfiles.js';
+
+test.describe('Argo Marker 3D Mesh Architecture & Anti-Sprite Regression', () => {
+  const sampleFloat = {
+    id: 'ARGO_2902145',
+    wmo_id: '2902145',
+    platform_type: 'argo',
+    lat: 12.48,
+    lon: 82.03,
+    timestamp: '2025-01-04T06:00:00Z',
+    qc_summary: { good: 7, bad: 0, pass_rate_pct: 100.0 }
+  };
+
+  test('createArgoMarker constructs bounded 3D mesh geometries and strictly zero screen-space Sprites', () => {
+    const marker = createArgoMarker(sampleFloat, false);
+    expect(marker).toBeInstanceOf(THREE.Group);
+
+    let spriteCount = 0;
+    let meshCount = 0;
+    marker.traverse((child) => {
+      if (child.isSprite || child instanceof THREE.Sprite) spriteCount++;
+      if (child.isMesh || child instanceof THREE.Mesh) meshCount++;
+    });
+
+    expect(spriteCount).toBe(0);
+    expect(meshCount).toBeGreaterThanOrEqual(4);
+
+    const beacon = marker.getObjectByName('beacon');
+    expect(beacon).toBeDefined();
+    expect(beacon.geometry).toBeInstanceOf(THREE.SphereGeometry);
+    expect(beacon.geometry.parameters.radius).toBe(1.2);
+
+    const ring = marker.getObjectByName('selection-ring');
+    expect(ring).toBeDefined();
+    expect(ring.geometry).toBeInstanceOf(THREE.RingGeometry);
+
+    const glow = marker.getObjectByName('glow');
+    expect(glow).toBeDefined();
+    expect(glow.geometry).toBeInstanceOf(THREE.SphereGeometry);
+  });
+
+  test('updateMarkerSelectionVisuals maintains 3D mesh architecture on selection without introducing Sprites', () => {
+    const marker = createArgoMarker(sampleFloat, false);
+    const container = new THREE.Group();
+    container.add(marker);
+
+    updateMarkerSelectionVisuals(container, 'ARGO_2902145');
+
+    let spriteCount = 0;
+    marker.traverse((child) => {
+      if (child.isSprite || child instanceof THREE.Sprite) spriteCount++;
+    });
+    expect(spriteCount).toBe(0);
+
+    const beacon = marker.getObjectByName('beacon');
+    const ring = marker.getObjectByName('selection-ring');
+    expect(beacon.scale.x).toBe(1.35);
+    expect(ring.visible).toBe(true);
+
+    disposeArgoMarkers(container);
+    expect(container.children.length).toBe(0);
+  });
+});
+
 test.describe('Observation Drawer & Marker Rendering Regression Test', () => {
   test.beforeEach(async ({ page }) => {
     await page.route('**/api/datasets', (route) =>
@@ -179,6 +248,39 @@ test.describe('Observation Drawer & Marker Rendering Regression Test', () => {
     const errors = [];
     page.on('pageerror', (err) => errors.push(err.message));
 
+    // Helper to evaluate rendered composited screenshot frame pixels
+    const sampleScreenshotFrame = async (screenshotBuffer) => {
+      return await page.evaluate(async (dataUrl) => {
+        const img = new window.Image();
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+          img.src = dataUrl;
+        });
+        const scratch = document.createElement('canvas');
+        scratch.width = img.width;
+        scratch.height = img.height;
+        const ctx = scratch.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+
+        const getPixel = (x, y) => {
+          const p = ctx.getImageData(x, y, 1, 1).data;
+          return {
+            r: p[0],
+            g: p[1],
+            b: p[2],
+            a: p[3],
+            brightness: (p[0] + p[1] + p[2]) / 3
+          };
+        };
+
+        const tl = getPixel(40, 40);
+        const tr = getPixel(img.width - 450, 40);
+        const center = getPixel(Math.floor(img.width * 0.45), Math.floor(img.height * 0.45));
+        return { width: img.width, height: img.height, tl, tr, center };
+      }, `data:image/png;base64,${screenshotBuffer.toString('base64')}`);
+    };
+
     // 1. Set 1920x1080 desktop viewport and load
     await page.setViewportSize({ width: 1920, height: 1080 });
     await page.goto('/');
@@ -231,29 +333,18 @@ test.describe('Observation Drawer & Marker Rendering Regression Test', () => {
     await glidersBtn.click();
     await expect(glidersBtn).toHaveAttribute('aria-pressed', 'true');
 
-    // 4. Meaningful structural/render assertion: inspect Three.js scene from browser context
-    const sceneStructure = await page.evaluate(() => {
-      // Find the Three.js scene through canvas parent or registered objects
-      const container = document.querySelector('[data-testid="three-canvas-container"]');
-      if (!container) return { found: false, reason: 'No container' };
-
-      // Sample rendered canvas corners to ensure background space is clear
-      const canvasEl = container.querySelector('canvas');
-      if (!canvasEl) return { found: false, reason: 'No canvas element' };
-
-      return {
-        found: true,
-        canvasWidth: canvasEl.width,
-        canvasHeight: canvasEl.height
-      };
-    });
-
-    expect(sceneStructure.found).toBe(true);
-    expect(sceneStructure.canvasWidth).toBeGreaterThan(1200);
-
-    // Capture Screenshot 1: Both layers active with drawer open
+    // 4. ACTIVE-STATE RENDERING ASSERTION (Both observation layers ON + Drawer OPEN)
     await page.waitForTimeout(600);
-    await page.screenshot({ path: path.join(evidenceDir, '01-argo-gliders-active-drawer-open.png') });
+    const screenshot1 = await page.screenshot({ path: path.join(evidenceDir, '01-argo-gliders-active-drawer-open.png') });
+    const activeFrame = await sampleScreenshotFrame(screenshot1);
+
+    expect(activeFrame.width).toBe(1920);
+    expect(activeFrame.height).toBe(1080);
+    // Prove frame is actively rendered (center globe/ocean data has non-zero brightness)
+    expect(activeFrame.center.brightness).toBeGreaterThan(20);
+    // Prove space background corners remain dark (no screen-spanning NDC sprite quads)
+    expect(activeFrame.tl.brightness).toBeLessThan(50);
+    expect(activeFrame.tr.brightness).toBeLessThan(50);
 
     // 5. Close Observation Drawer while markers remain active
     const closeBtn = drawer.locator('.icon-close-btn');
@@ -263,9 +354,13 @@ test.describe('Observation Drawer & Marker Rendering Regression Test', () => {
     await expect(argoBtn).toHaveAttribute('aria-pressed', 'true');
     await expect(glidersBtn).toHaveAttribute('aria-pressed', 'true');
 
-    // Capture Screenshot 2: Both layers active with drawer closed (clean full globe view)
+    // Active-state check with drawer closed (clean full globe view)
     await page.waitForTimeout(600);
-    await page.screenshot({ path: path.join(evidenceDir, '02-both-layers-active-drawer-closed.png') });
+    const screenshot2 = await page.screenshot({ path: path.join(evidenceDir, '02-both-layers-active-drawer-closed.png') });
+    const closedDrawerFrame = await sampleScreenshotFrame(screenshot2);
+    expect(closedDrawerFrame.center.brightness).toBeGreaterThan(20);
+    expect(closedDrawerFrame.tl.brightness).toBeLessThan(50);
+    expect(closedDrawerFrame.tr.brightness).toBeLessThan(50);
 
     // 6. Test Glider-only state
     await argoBtn.click();
@@ -294,7 +389,12 @@ test.describe('Observation Drawer & Marker Rendering Regression Test', () => {
     await floatCard.click();
 
     await page.waitForTimeout(600);
-    await page.screenshot({ path: path.join(evidenceDir, '05-selected-float-with-halo-drawer-open.png') });
+    // ACTIVE-STATE SELECTED FLOAT ASSERTION: Selection halo active on globe
+    const screenshot5 = await page.screenshot({ path: path.join(evidenceDir, '05-selected-float-with-halo-drawer-open.png') });
+    const selectedFloatFrame = await sampleScreenshotFrame(screenshot5);
+    expect(selectedFloatFrame.center.brightness).toBeGreaterThan(20);
+    expect(selectedFloatFrame.tl.brightness).toBeLessThan(50);
+    expect(selectedFloatFrame.tr.brightness).toBeLessThan(50);
 
     // 9. Test both-off state
     await argoBtn.click();
@@ -302,36 +402,11 @@ test.describe('Observation Drawer & Marker Rendering Regression Test', () => {
     await expect(glidersBtn).toHaveAttribute('aria-pressed', 'false');
 
     await page.waitForTimeout(500);
-    await page.screenshot({ path: path.join(evidenceDir, '06-both-off-drawer-open.png') });
-
-    // 10. Pixel brightness / artifact discrimination check:
-    // Assert that the corner regions of the canvas are deep-space background (near-black #020712)
-    // and NOT filled with an opaque cyan or orange quad (which would have high brightness across the entire screen).
-    const cornerBrightness = await page.evaluate(() => {
-      const canvasEl = document.querySelector('.globe-canvas-wrapper canvas');
-      if (!canvasEl) return { tl: 255, br: 255 };
-
-      // Create 2D offscreen canvas to sample WebGL render buffer
-      const scratch = document.createElement('canvas');
-      scratch.width = canvasEl.width;
-      scratch.height = canvasEl.height;
-      const ctx = scratch.getContext('2d');
-      ctx.drawImage(canvasEl, 0, 0);
-
-      const getPointBrightness = (x, y) => {
-        const p = ctx.getImageData(x, y, 1, 1).data;
-        return (p[0] + p[1] + p[2]) / 3;
-      };
-
-      // Sample top-left corner (space background) and top-right corner (space background)
-      const tl = getPointBrightness(40, 40);
-      const tr = getPointBrightness(canvasEl.width - 420, 40);
-      return { tl, tr };
-    });
-
-    // Space background is dark (< 40), proving no giant opaque band covers the corners/screen
-    expect(cornerBrightness.tl).toBeLessThan(50);
-    expect(cornerBrightness.tr).toBeLessThan(50);
+    const screenshot6 = await page.screenshot({ path: path.join(evidenceDir, '06-both-off-drawer-open.png') });
+    const bothOffFrame = await sampleScreenshotFrame(screenshot6);
+    expect(bothOffFrame.center.brightness).toBeGreaterThan(20);
+    expect(bothOffFrame.tl.brightness).toBeLessThan(50);
+    expect(bothOffFrame.tr.brightness).toBeLessThan(50);
 
     expect(errors).toEqual([]);
   });
