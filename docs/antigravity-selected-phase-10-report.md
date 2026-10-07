@@ -3,56 +3,44 @@
 ## 1. Executive Summary
 
 - **Feature**: Selected Phase 10 — Buoy observations (Importance: 2/5).
-- **Status**: Ready for Codex review.
+- **Status**: Ready for Codex review (Phase 10 corrections).
 - **Phase 09 Acceptance Commit**: `9d154bd84a01baa898eef3e43ff94b074c432b12` (`docs(phase-09): record Codex Phase 09 acceptance and update plan`).
-- **Phase 10 Implementation Commit**: `509070dd1facf1f9f0d38f18e6f7a9f638935b9f` (`feat(phase-10): implement local buoy observation browsing and station inspection`).
-- **Phase 10 Implementation**: Complete end-to-end implementation of local moored ocean buoy observation browsing, station inspection, multi-depth thermistor chain CTD series, and meteorological parameters with explicit `[REAL • INCOIS]` provenance.
+- **Phase 10 Implementation Commit**: `121664da84e618caf3879139372d9e57d716a877` (`feat(phase-10): implement local buoy observation browsing and station inspection`).
+- **Phase 10 Corrections Commit**: `<TO_BE_RECORDED_AFTER_COMMIT>`
+- **Corrections Summary**: Corrected built-in buoy reference catalog classification to `BUNDLED_REFERENCE` with badge `[REFERENCE • BUNDLED]` and note `"Bundled reference sample · illustrative, not live"`. Eliminated timestamp fabrication (`datetime.now()`), keeping observation times absent (`None`) when missing in source. Removed manufactured all-good QC flags and unverified 100% pass rates, presenting honest `"Unavailable"` and `"QC: Not reported"` states in the Observation Drawer and Profile Modal. Preserved true local-file provenance (`REAL_LOCAL`, `[REAL • LOCAL_FILE]`) and source metadata for files parsed from disk.
 
 ---
 
-## 2. Changes Made
+## 2. Corrections Applied (Phase 10 Remediation)
 
-### A. Backend Schemas & Service Layer
-1. **`backend/app/schemas/insitu.py`**:
-   - Added `BuoySummary` model containing station identification (`id`, `name`, `wmo_id`), coordinates (`lat`, `lon`), timestamp, max depth, level count, surface temperature/salinity, meteorological readings (`air_temperature`, `surface_pressure_hpa`, `wind_speed_ms`, `wind_direction_deg`, `significant_wave_height_m`), `qc_summary`, `source_mode="REAL_LOCAL"`, `provenance_badge="[REAL • INCOIS]"`, and `provider="INCOIS"`.
-   - Added `BuoyDetail` model extending summary with full vertical depth, temperature, salinity, QC flags arrays, and detailed station metadata.
-   - Added `buoy_count: int = 0` field to `InsituStatusResponse`.
+### A. Honest Provenance & Source Mode Separation
+1. **`backend/app/data/incois_ingest.py`**:
+   - Updated `INCOIS_REFERENCE_BUOYS`: Assigned `source_mode="BUNDLED_REFERENCE"`, `provenance_badge="[REFERENCE • BUNDLED]"`, and `provenance_note="Bundled reference sample · illustrative, not live"`.
+   - Updated `parse_incois_netcdf()`: Parsed actual source time and QC variables if present; otherwise left `timestamp=None` and `qc_flags=None`. Set `source_mode="REAL_LOCAL"` and `provenance_badge="[REAL • LOCAL_FILE]"`.
+   - Updated `scan_incois_directory()`: Removed `datetime.now()` and all-good QC injection for reference catalog items.
 
-2. **`backend/app/services/insitu_service.py`**:
-   - Implemented `normalize_buoy()` to validate domain coordinates, compute WMO QC flag statistics, extract meteorological values, and format metadata with strict `REAL_LOCAL` source mode and `[REAL • INCOIS]` badge.
-   - Added `self.buoy_stations` and `self._buoys_by_id` state to `InsituDataService`.
-   - Updated `load_observations()` to scan and index all INCOIS moored buoys.
-   - Implemented `get_buoy_stations(qc_filter, source_mode)` returning local reference buoy stations, cleanly returning empty list on `source_mode="SYNTHETIC"` without fabricating fake synthetic buoys.
-   - Implemented `get_buoy_by_id(buoy_id)` supporting exact station ID, case-insensitive, and WMO numeric ID lookups.
-   - Updated `get_status()` to report active `buoy_count`.
+2. **`backend/app/schemas/insitu.py`**:
+   - `BuoySummary`: Updated `timestamp: Optional[str] = None`, `qc_summary: Optional[QCFlagSummary] = None`, `source_mode: str = "BUNDLED_REFERENCE"`, `provenance_badge: str = "[REFERENCE • BUNDLED]"`, and added `provenance_note: Optional[str] = None`.
+   - `BuoyDetail`: Updated `timestamp: Optional[str] = None`, `qc_flags: Optional[List[int]] = None`, `qc_summary: Optional[QCFlagSummary] = None`, `source_mode: str = "BUNDLED_REFERENCE"`, `provenance_badge: str = "[REFERENCE • BUNDLED]"`, and added `provenance_note: Optional[str] = None`.
 
-3. **`backend/app/routers/routes_insitu.py`**:
-   - Added `GET /api/insitu/buoys` returning `List[BuoySummary]`.
-   - Added `GET /api/insitu/buoys/{buoy_id}` returning `BuoyDetail` with clean HTTP 404 handling on unknown station IDs or non-buoy platform IDs.
+3. **`backend/app/services/insitu_service.py`**:
+   - Updated `normalize_buoy()`: Defaulted source mode to `BUNDLED_REFERENCE` and provenance badge to `[REFERENCE • BUNDLED]`. Preserved `raw.get("timestamp")` without substituting `datetime.now()`. Computed `qc_summary` only if source `qc_flags` is present, otherwise kept `qc_summary=None`.
+   - Updated `get_buoy_stations()`: Supported explicit source modes (`BUNDLED_REFERENCE`, `REAL_LOCAL`, `ALL`), cleanly returned `[]` on `SYNTHETIC`, and safely checked `qc_summary` before evaluating `qc_filter`.
+   - Updated `load_observations()`: Categorized reference buoys as `BUNDLED_REFERENCE` and disk-parsed NetCDF/JSON buoys as `REAL_LOCAL`.
 
-### B. Frontend Service & UI Components
-1. **`frontend/src/services/api.js`**:
-   - Added `fetchBuoyStations({ qc_filter, source_mode, signal })` querying `/api/insitu/buoys`.
-   - Added `fetchBuoyDetail(buoyId, signal)` querying `/api/insitu/buoys/{buoyId}`.
+### B. Frontend UI Honest State Presentation
+1. **`frontend/src/components/ObservationDrawer.jsx`**:
+   - Displayed `[REFERENCE • BUNDLED]` badge styling for bundled reference buoys.
+   - Removed generic fallback date strings; rendered `"Time: Unavailable"` when `timestamp` is absent.
+   - Rendered `"QC: Not reported"` when `qc_summary` is absent.
 
-2. **`frontend/src/components/ObservationDrawer.jsx`**:
-   - Enabled `BUOY` filter chip (removed `(UNSUPPORTED)` badge and notice).
-   - Added buoy stations mapping to `combinedPlatforms` with `[REAL • INCOIS]` badge, stationary cycle indicator, depth range, and meteorological parameter summary chips (Air Temp, Wind Speed, Pressure, Wave Height).
-   - Rendered standard platform actions: `OPEN PROFILE`, `COMPARE MODEL`, and `FOCUS`.
-   - Cleanly preserved empty and filtered search states.
+2. **`frontend/src/components/ProfileModal.jsx`**:
+   - Displayed `[REFERENCE • BUNDLED]` badge and prominent provenance note `"Bundled reference sample · illustrative, not live"` when viewing reference buoys.
+   - Displayed `"QC: Not reported"` badge when source QC is absent (prevented manufactured 100% pass rate).
+   - Displayed `"Unavailable"` timestamp when source time is missing.
 
-3. **`frontend/src/components/ProfileModal.jsx`**:
-   - Added `isBuoy` platform detection and `MOORED BUOY` header badge.
-   - Displayed station metadata, institutional provider (`INCOIS`), coordinates, timestamp, and dedicated meteorological summary row when readings are available.
-   - Enabled model collocation profile fetching for moored buoy station coordinates.
-
-4. **`frontend/src/App.jsx`**:
-   - Maintained `buoyStations` state and added automated loading effect on drawer open.
-   - Updated `handleSelectFloat` to fetch buoy details via `fetchBuoyDetail` when selecting a buoy station card.
-   - Passed `buoyStations` to `ObservationDrawer` and configured comparison context on `COMPARE MODEL`.
-
-5. **`frontend/src/index.css`**:
-   - Added `.badge-buoy` styling matching marine telemetry theme.
+3. **`frontend/src/utils/profileCharts.js`**:
+   - Updated `cleanProfileData()` to safely handle `null` or missing `qc_flags` without raising `TypeError`.
 
 ---
 
@@ -60,13 +48,14 @@
 
 | Suite / Gate | Command | Result / Exact Counts |
 |---|---|---|
-| Backend Test Suite | `python -m unittest discover -s backend/tests -p "test_*.py"` | **103 passed, 2 skipped** |
-| Backend Buoy Contract Tests | `python backend/tests/test_buoys.py` | **100% passed (6 test sections)** |
-| Frontend Lint | `npm.cmd run lint` (in `frontend/`) | **0 warnings, 0 errors (Passed)** |
-| Frontend Build | `npm.cmd run build` (in `frontend/`) | **Built successfully in 11.66s** |
-| Transition Queue Tests | `node tests/transitionQueue.test.js` (in `frontend/`) | **2 passed, 0 failed** |
-| Playwright Phase 10 Suite | `npx playwright test tests/selected-phase-10.spec.js` | **4 passed (13.0s)** |
-| Playwright Broader Regression | `npx playwright test tests/selected-phase-05.spec.js tests/selected-phase-06.spec.js tests/selected-phase-07.spec.js tests/selected-phase-08.spec.js tests/selected-phase-09.spec.js tests/selected-phase-10.spec.js` | **44 passed (1.5m)** |
+| Backend Test Suite | `python -m unittest discover -s backend/tests -p "test_*.py"` | **103 passed, 2 skipped (0 failures)** |
+| Backend Buoy Contract Tests | `python backend/tests/test_buoys.py` | **100% passed (7 test sections)** |
+| Backend Real Ingest Suite | `python -m unittest backend/tests/test_insitu_real_ingest.py` | **7 passed (0 failures)** |
+| Frontend Lint | `npm run lint` (in `frontend/`) | **0 warnings, 0 errors (Clean)** |
+| Frontend Build | `npm run build` (in `frontend/`) | **Built successfully in 1.50s** |
+| Transition Queue Unit Tests | `node tests/transitionQueue.test.js` (in `frontend/`) | **2 passed, 0 failed** |
+| Playwright Phase 10 Suite | `npx playwright test tests/selected-phase-10.spec.js` | **4 passed (38.7s)** |
+| Playwright Regression Suite | `npx playwright test tests/selected-phase-08.spec.js tests/selected-phase-09.spec.js tests/selected-phase-10.spec.js` | **20 passed (36.0s)** |
 | Git Diff Check | `git diff --check` | **0 issues (clean)** |
 
 ---
@@ -74,9 +63,9 @@
 ## 4. Evidence Artifacts
 
 The following visual evidence was captured during deterministic end-to-end browser test execution:
-- `docs/evidence/selected-phase-10/01_buoy_drawer_station_list.png`: Moored buoy stations listed in Observation Drawer with `[REAL • INCOIS]` badges and meteorological parameter chips.
-- `docs/evidence/selected-phase-10/02_buoy_profile_modal_inspection.png`: Profile Modal displaying `MOORED BUOY` badge, meteorological metadata grid, and vertical thermistor depth curve.
-- `docs/evidence/selected-phase-10/03_buoy_model_comparison_modal.png`: Model comparison modal triggered from buoy station card.
+- `docs/evidence/selected-phase-10/01_buoy_drawer_station_list.png`: Observation Drawer listing bundled reference buoys with `[REFERENCE • BUNDLED]` badge, `QC: Not reported`, and `Time: Unavailable`, alongside a real local-file buoy with `[REAL • LOCAL_FILE]`.
+- `docs/evidence/selected-phase-10/02_buoy_profile_modal_inspection.png`: Profile Modal displaying `[REFERENCE • BUNDLED]` badge, `"Bundled reference sample · illustrative, not live"` provenance notice, `QC: Not reported`, and `Unavailable` timestamp.
+- `docs/evidence/selected-phase-10/03_buoy_model_comparison_modal.png`: Model comparison modal launched for buoy station.
 - `docs/evidence/selected-phase-10/04_buoy_drawer_search_and_empty.png`: Search filtering and clean empty state in Observation Drawer.
 
 ---
@@ -85,5 +74,5 @@ The following visual evidence was captured during deterministic end-to-end brows
 
 - **Live external feeds**: NOT implemented. No external network polling, live cyclone tracks, or unverified live streams were added.
 - **Saved locations/analyses**: NOT implemented. Excluded features were left untouched.
-- **Unrelated redesign**: Preserved all existing design tokens, components, and workflows.
+- **No later phases started**: Stopped immediately after Phase 10 corrections verification.
 - **No push/deploy**: Implementation is staged and committed locally only.

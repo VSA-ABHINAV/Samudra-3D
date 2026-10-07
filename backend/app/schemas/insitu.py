@@ -121,7 +121,7 @@ class BuoySummary(BaseModel):
     wmo_id: Optional[str] = None
     lat: float
     lon: float
-    timestamp: str
+    timestamp: Optional[str] = None
     max_depth: float
     num_levels: int
     surface_temp: Optional[float] = None
@@ -131,9 +131,10 @@ class BuoySummary(BaseModel):
     wind_speed_ms: Optional[float] = None
     wind_direction_deg: Optional[float] = None
     significant_wave_height_m: Optional[float] = None
-    qc_summary: QCFlagSummary
-    source_mode: str = "REAL_LOCAL"
-    provenance_badge: str = "[REAL • INCOIS]"
+    qc_summary: Optional[QCFlagSummary] = None
+    source_mode: str = "BUNDLED_REFERENCE"
+    provenance_badge: str = "[REFERENCE • BUNDLED]"
+    provenance_note: Optional[str] = None
     provider: str = "INCOIS"
 
 class BuoyDetail(BaseModel):
@@ -143,7 +144,7 @@ class BuoyDetail(BaseModel):
     wmo_id: Optional[str] = None
     lat: float
     lon: float
-    timestamp: str
+    timestamp: Optional[str] = None
     max_depth: float
     num_levels: int
     surface_temp: Optional[float] = None
@@ -156,11 +157,12 @@ class BuoyDetail(BaseModel):
     depths: List[float]
     temperature: List[float]
     salinity: List[float]
-    qc_flags: List[int]
-    qc_summary: QCFlagSummary
+    qc_flags: Optional[List[int]] = None
+    qc_summary: Optional[QCFlagSummary] = None
     metadata: Dict[str, Any]
-    source_mode: str = "REAL_LOCAL"
-    provenance_badge: str = "[REAL • INCOIS]"
+    source_mode: str = "BUNDLED_REFERENCE"
+    provenance_badge: str = "[REFERENCE • BUNDLED]"
+    provenance_note: Optional[str] = None
     provider: str = "INCOIS"
 
 class InsituStatusResponse(BaseModel):

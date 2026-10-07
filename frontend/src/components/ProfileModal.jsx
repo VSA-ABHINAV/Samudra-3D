@@ -323,13 +323,11 @@ export default function ProfileModal({
   const dataCentre = selectedFloat.metadata?.data_centre || 'Not supplied';
   const cycleNumber = selectedFloat.metadata?.cycle_number ?? 'N/A';
   const sourceMode = selectedFloat.source_mode === 'SYNTHETIC' ? 'OPERATIONAL' : (selectedFloat.source_mode || 'OPERATIONAL');
-  const qc = selectedFloat.qc_summary || {
-    pass_rate_pct: selectedFloat.qc_flags && selectedFloat.qc_flags.length > 0
-      ? Math.round((selectedFloat.qc_flags.filter(f => f === 1 || f === 2).length / selectedFloat.qc_flags.length) * 100)
-      : 100,
-    good: selectedFloat.qc_flags ? selectedFloat.qc_flags.filter(f => f === 1 || f === 2).length : depths.length,
-    total: selectedFloat.qc_flags ? selectedFloat.qc_flags.length : depths.length
-  };
+  const qc = selectedFloat.qc_summary || (selectedFloat.qc_flags && selectedFloat.qc_flags.length > 0 ? {
+    pass_rate_pct: Math.round((selectedFloat.qc_flags.filter(f => f === 1 || f === 2).length / selectedFloat.qc_flags.length) * 100),
+    good: selectedFloat.qc_flags.filter(f => f === 1 || f === 2).length,
+    total: selectedFloat.qc_flags.length
+  } : null);
 
   if (!hasData) {
     if (isModel) {
@@ -518,7 +516,7 @@ export default function ProfileModal({
                 <span style={{ fontSize: '10px', color: '#38bdf8', background: 'var(--field)', padding: '1px 5px', borderRadius: '3px', fontWeight: 600 }}>
                   {selectedFloat.depths.length} Depths ({Math.min(...selectedFloat.depths).toFixed(1)}m – {Math.max(...selectedFloat.depths).toFixed(1)}m)
                 </span>
-              ) : (
+              ) : qc ? (
                 <span
                   style={{
                     fontSize: '10px',
@@ -532,6 +530,20 @@ export default function ProfileModal({
                 >
                   {qc.pass_rate_pct}% Pass ({qc.good ?? qc.total}/{qc.total} levels)
                 </span>
+              ) : (
+                <span
+                  style={{
+                    fontSize: '10px',
+                    color: 'var(--muted)',
+                    background: 'var(--field)',
+                    padding: '1px 5px',
+                    borderRadius: '3px',
+                    fontWeight: 600
+                  }}
+                  data-testid="qc-badge"
+                >
+                  QC: Not reported
+                </span>
               )}
             </div>
             <h3 id="profile-heading" style={{ fontSize: '14px', fontWeight: 600, marginTop: '4px', color: 'var(--text)' }} data-testid="profile-title">
@@ -539,6 +551,11 @@ export default function ProfileModal({
                 ? `Model Water Column Profile • ${formatFloatCoordinates(selectedFloat.lat, selectedFloat.lon)}`
                 : (selectedFloat?.mission_name || selectedFloat?.name || (isGlider ? `Glider ${selectedFloat?.id}` : (isBuoy ? `Buoy ${selectedFloat?.id}` : (isArgo ? `Float ${wmoId}` : `Platform ${selectedFloat?.id}`))))}
             </h3>
+            {(selectedFloat.provenance_note || selectedFloat.metadata?.provenance_note) && (
+              <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#fbbf24', fontFamily: 'monospace' }} data-testid="provenance-note">
+                ℹ️ {selectedFloat.provenance_note || selectedFloat.metadata?.provenance_note}
+              </p>
+            )}
           </div>
           <button
             ref={closeBtnRef}
@@ -1183,14 +1200,14 @@ function TSDiagramSvgChart({
       const d = depths[i];
       const t = temperatures[i];
       const s = salinities[i];
-      const qc = qcFlags[i] ?? 1;
+      const qc = Array.isArray(qcFlags) ? (qcFlags[i] ?? 1) : null;
       if (d != null && t != null && s != null && !isNaN(d) && !isNaN(t) && !isNaN(s)) {
         pts.push({
           depth: d,
           temperature: t,
           salinity: s,
           qcFlag: qc,
-          isGood: qc === 1 || qc === 2,
+          isGood: qc === 1 || qc === 2 || qc === null,
           density: computePotentialDensity(s, t)
         });
       }

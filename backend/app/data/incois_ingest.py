@@ -31,8 +31,9 @@ INCOIS_REFERENCE_BUOYS = [
         "wind_speed_ms": 6.8,
         "wind_direction_deg": 215.0,
         "significant_wave_height_m": 1.4,
-        "qc_flags": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-        "provenance_badge": "[REAL • INCOIS]"
+        "source_mode": "BUNDLED_REFERENCE",
+        "provenance_badge": "[REFERENCE • BUNDLED]",
+        "provenance_note": "Bundled reference sample · illustrative, not live"
     },
     {
         "id": "INCOIS_BUOY_BD10",
@@ -51,8 +52,9 @@ INCOIS_REFERENCE_BUOYS = [
         "wind_speed_ms": 7.2,
         "wind_direction_deg": 220.0,
         "significant_wave_height_m": 1.6,
-        "qc_flags": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-        "provenance_badge": "[REAL • INCOIS]"
+        "source_mode": "BUNDLED_REFERENCE",
+        "provenance_badge": "[REFERENCE • BUNDLED]",
+        "provenance_note": "Bundled reference sample · illustrative, not live"
     },
     {
         "id": "INCOIS_BUOY_AD01",
@@ -71,8 +73,9 @@ INCOIS_REFERENCE_BUOYS = [
         "wind_speed_ms": 8.4,
         "wind_direction_deg": 245.0,
         "significant_wave_height_m": 2.1,
-        "qc_flags": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-        "provenance_badge": "[REAL • INCOIS]"
+        "source_mode": "BUNDLED_REFERENCE",
+        "provenance_badge": "[REFERENCE • BUNDLED]",
+        "provenance_note": "Bundled reference sample · illustrative, not live"
     },
     {
         "id": "INCOIS_BUOY_AD06",
@@ -91,8 +94,9 @@ INCOIS_REFERENCE_BUOYS = [
         "wind_speed_ms": 5.9,
         "wind_direction_deg": 230.0,
         "significant_wave_height_m": 1.3,
-        "qc_flags": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-        "provenance_badge": "[REAL • INCOIS]"
+        "source_mode": "BUNDLED_REFERENCE",
+        "provenance_badge": "[REFERENCE • BUNDLED]",
+        "provenance_note": "Bundled reference sample · illustrative, not live"
     },
     {
         "id": "INCOIS_BUOY_CB02",
@@ -111,8 +115,9 @@ INCOIS_REFERENCE_BUOYS = [
         "wind_speed_ms": 4.5,
         "wind_direction_deg": 190.0,
         "significant_wave_height_m": 0.9,
-        "qc_flags": [1, 1, 1, 1, 1, 1],
-        "provenance_badge": "[REAL • INCOIS]"
+        "source_mode": "BUNDLED_REFERENCE",
+        "provenance_badge": "[REFERENCE • BUNDLED]",
+        "provenance_note": "Bundled reference sample · illustrative, not live"
     }
 ]
 
@@ -138,6 +143,8 @@ def parse_incois_netcdf(file_path: Path) -> List[Dict[str, Any]]:
             depth_var = ds.variables.get("DEPTH") or ds.variables.get("depth")
             temp_var = ds.variables.get("TEMP") or ds.variables.get("temperature")
             sal_var = ds.variables.get("PSAL") or ds.variables.get("salinity")
+            time_var = ds.variables.get("TIME") or ds.variables.get("time") or ds.variables.get("JULD")
+            qc_var = ds.variables.get("QC_FLAGS") or ds.variables.get("TEMP_QC") or ds.variables.get("QC")
 
             if lat_var is None or lon_var is None:
                 return []
@@ -149,7 +156,28 @@ def parse_incois_netcdf(file_path: Path) -> List[Dict[str, Any]]:
             temps = [float(t) for t in np.array(temp_var[:]).flatten() if not np.isnan(t)] if temp_var is not None else []
             sals = [float(s) for s in np.array(sal_var[:]).flatten() if not np.isnan(s)] if sal_var is not None else []
 
-            clean_qc = [1] * len(depths)
+            # Read source timestamp if present
+            timestamp = None
+            if time_var is not None:
+                try:
+                    time_val = time_var[0] if len(time_var.shape) > 0 else time_var
+                    if hasattr(time_var, "units"):
+                        import netCDF4
+                        dt = netCDF4.num2date(time_val, units=time_var.units)
+                        timestamp = dt.isoformat()
+                    else:
+                        timestamp = str(time_val)
+                except Exception:
+                    timestamp = None
+
+            # Read source QC flags if present
+            qc_flags = None
+            if qc_var is not None:
+                try:
+                    qc_flags = [int(q) for q in np.array(qc_var[:]).flatten()]
+                except Exception:
+                    qc_flags = None
+
             buoys.append({
                 "id": f"INCOIS_BUOY_{file_path.stem}",
                 "platform_type": "buoy",
@@ -157,30 +185,25 @@ def parse_incois_netcdf(file_path: Path) -> List[Dict[str, Any]]:
                 "wmo_id": str(wmo_id),
                 "lat": round(lat, 4),
                 "lon": round(lon, 4),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": timestamp,
                 "depths": depths,
                 "temperature": temps,
                 "salinity": sals,
-                "qc_flags": clean_qc,
-                "qc_summary": {
-                    "good": len(clean_qc),
-                    "probably_good": 0,
-                    "bad": 0,
-                    "missing": 0,
-                    "total": len(clean_qc),
-                    "pass_rate_pct": 100.0
-                },
+                "qc_flags": qc_flags,
                 "max_depth": max(depths) if depths else 0.0,
                 "num_levels": len(depths),
                 "surface_temp": temps[0] if temps else None,
                 "surface_salinity": sals[0] if sals else None,
                 "metadata": {
-                    "source": "INCOIS OMNI Network",
+                    "source": "INCOIS OMNI Network (Local File)",
                     "file": file_path.name,
                     "source_mode": "REAL_LOCAL",
-                    "provenance_badge": "[REAL • INCOIS]"
+                    "provenance_badge": "[REAL • LOCAL_FILE]",
+                    "provenance_note": f"Parsed from local file {file_path.name}"
                 },
-                "source_mode": "REAL_LOCAL"
+                "source_mode": "REAL_LOCAL",
+                "provenance_badge": "[REAL • LOCAL_FILE]",
+                "provenance_note": f"Parsed from local file {file_path.name}"
             })
     except Exception:
         return []
@@ -191,7 +214,7 @@ def parse_incois_netcdf(file_path: Path) -> List[Dict[str, Any]]:
 def scan_incois_directory(raw_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
     """
     Scans SAMUDRA_DATA/raw/incois for NetCDF or JSON buoy files.
-    If none exist yet, yields calibrated INCOIS reference buoys with [REAL • INCOIS] badge.
+    If none exist yet, yields calibrated INCOIS reference buoys with [REFERENCE • BUNDLED] badge.
     """
     if raw_dir is None:
         raw_dir = settings.RAW_DATA_DIR / "incois" if settings.RAW_DATA_DIR else None
@@ -213,31 +236,25 @@ def scan_incois_directory(raw_dir: Optional[Path] = None) -> List[Dict[str, Any]
             except Exception:
                 continue
 
-    # Ensure verified INCOIS OMNI reference network buoys are always included alongside file-based buoys
+    # Ensure verified INCOIS OMNI bundled reference network buoys are always included alongside file-based buoys
     existing_ids = {b.get("id") for b in buoys}
     for b in INCOIS_REFERENCE_BUOYS:
         if b.get("id") not in existing_ids:
-            qc = b.get("qc_flags", [1] * len(b["depths"]))
-            tot = len(qc)
             item = dict(b)
-            item["timestamp"] = datetime.now(timezone.utc).isoformat()
-            item["max_depth"] = max(b["depths"])
-            item["num_levels"] = len(b["depths"])
-            item["qc_summary"] = {
-                "good": tot,
-                "probably_good": 0,
-                "bad": 0,
-                "missing": 0,
-                "total": tot,
-                "pass_rate_pct": 100.0
-            }
+            item["timestamp"] = b.get("timestamp")  # None for reference buoys, never fabricated
+            item["max_depth"] = max(b["depths"]) if b.get("depths") else 0.0
+            item["num_levels"] = len(b["depths"]) if b.get("depths") else 0
+            item["qc_flags"] = b.get("qc_flags")  # None if absent
             item["metadata"] = {
-                "source": "INCOIS Moored Buoy Network (OMNI)",
+                "source": "INCOIS Moored Buoy Network (Reference Catalog)",
                 "institution": "Indian National Centre for Ocean Information Services",
-                "source_mode": "REAL_LOCAL",
-                "provenance_badge": "[REAL • INCOIS]"
+                "source_mode": "BUNDLED_REFERENCE",
+                "provenance_badge": "[REFERENCE • BUNDLED]",
+                "provenance_note": "Bundled reference sample · illustrative, not live"
             }
-            item["source_mode"] = "REAL_LOCAL"
+            item["source_mode"] = "BUNDLED_REFERENCE"
+            item["provenance_badge"] = "[REFERENCE • BUNDLED]"
+            item["provenance_note"] = "Bundled reference sample · illustrative, not live"
             buoys.append(item)
 
     return buoys

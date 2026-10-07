@@ -74,16 +74,16 @@ export default function ObservationDrawer({
         id: b.id,
         type: 'buoy',
         typeLabel: 'Moored Buoy',
-        badge: b.provenance_badge || '[REAL • INCOIS]',
-        badgeClass: 'badge-buoy',
+        badge: b.provenance_badge || (b.source_mode === 'BUNDLED_REFERENCE' ? '[REFERENCE • BUNDLED]' : '[REAL • INCOIS]'),
+        badgeClass: b.source_mode === 'BUNDLED_REFERENCE' ? 'badge-synthetic' : 'badge-buoy',
         name: b.name || `INCOIS Buoy ${b.wmo_id || b.id}`,
         wmoId: b.wmo_id || b.id,
         lat: b.lat,
         lon: b.lon,
-        timestamp: b.timestamp || '2025-01-04T00:00:00Z',
+        timestamp: b.timestamp || null,
         cycle: b.air_temperature !== undefined && b.air_temperature !== null ? `${b.air_temperature}°C Air` : 'Stationary',
         depthRange: b.depths?.length ? `0 – ${Math.max(...b.depths).toFixed(0)}m` : (b.max_depth ? `0 – ${b.max_depth.toFixed(0)}m` : '0 – 500m'),
-        qcStatus: b.qc_summary?.pass_rate_pct ? `${b.qc_summary.pass_rate_pct}%` : 'PASSED',
+        qcStatus: b.qc_summary?.pass_rate_pct !== undefined ? `${b.qc_summary.pass_rate_pct}%` : 'Not reported',
         raw: { ...b, platform_type: 'buoy' }
       });
     }
@@ -200,7 +200,7 @@ export default function ObservationDrawer({
                     <span className="text-slate-500">Cycle:</span> {p.cycle}
                   </div>
                   <div>
-                    <span className="text-slate-500">Time:</span> {p.timestamp.slice(0, 10)}
+                    <span className="text-slate-500">Time:</span> {p.timestamp ? p.timestamp.slice(0, 10) : 'Unavailable'}
                   </div>
                 </div>
 

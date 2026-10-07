@@ -219,7 +219,7 @@ class InsituDataService:
             "source_mode": source_mode
         }
 
-    def normalize_buoy(self, raw: Dict[str, Any], default_source_mode: str = "REAL_LOCAL") -> Optional[Dict[str, Any]]:
+    def normalize_buoy(self, raw: Dict[str, Any], default_source_mode: str = "BUNDLED_REFERENCE") -> Optional[Dict[str, Any]]:
         """Normalizes INCOIS moored ocean buoy stations and thermistor chain profiles."""
         buoy_id = raw.get("id")
         lat = raw.get("lat")
@@ -239,12 +239,13 @@ class InsituDataService:
 
         temps = raw.get("temperature", [])
         sals = raw.get("salinity", [])
-        qc_flags = raw.get("qc_flags", [1] * len(depths))
+        qc_flags = raw.get("qc_flags")
 
-        qc_summary = self.compute_qc_summary(qc_flags)
+        qc_summary = self.compute_qc_summary(qc_flags).model_dump() if qc_flags is not None else None
         metadata = dict(raw.get("metadata", {}))
         source_mode = raw.get("source_mode") or metadata.get("source_mode", default_source_mode)
-        provenance_badge = raw.get("provenance_badge") or metadata.get("provenance_badge", "[REAL • INCOIS]")
+        provenance_badge = raw.get("provenance_badge") or metadata.get("provenance_badge", "[REFERENCE • BUNDLED]")
+        provenance_note = raw.get("provenance_note") or metadata.get("provenance_note")
         provider = raw.get("provider") or metadata.get("provider", "INCOIS")
 
         wmo_id = raw.get("wmo_id") or metadata.get("wmo_id")
@@ -262,12 +263,12 @@ class InsituDataService:
             "wmo_id": str(wmo_id) if wmo_id is not None else None,
             "lat": float(lat),
             "lon": float(lon),
-            "timestamp": raw.get("timestamp", datetime.now(timezone.utc).isoformat()),
+            "timestamp": raw.get("timestamp"),
             "depths": depths,
             "temperature": temps,
             "salinity": sals,
             "qc_flags": qc_flags,
-            "qc_summary": qc_summary.model_dump(),
+            "qc_summary": qc_summary,
             "max_depth": float(max_depth),
             "num_levels": len(depths),
             "surface_temp": surface_temp,
@@ -280,6 +281,7 @@ class InsituDataService:
             "metadata": metadata,
             "source_mode": source_mode,
             "provenance_badge": provenance_badge,
+            "provenance_note": provenance_note,
             "provider": provider
         }
 
@@ -381,7 +383,7 @@ class InsituDataService:
         except Exception:
             pass
 
-        # 6. INCOIS OMNI buoys – loads INCOIS buoy + REAL_LOCAL.
+        # 6. INCOIS OMNI buoys – loads INCOIS buoy reference records + REAL_LOCAL files.
         try:
             from backend.app.data.incois_ingest import scan_incois_directory
             raw_root = self._raw_data_dir if self._raw_data_dir is not None else settings.RAW_DATA_DIR
@@ -389,12 +391,13 @@ class InsituDataService:
             incois = scan_incois_directory(incois_dir)
             for item in incois:
                 pid = item.get("id")
-                norm = self.normalize_buoy(item, default_source_mode="REAL_LOCAL")
+                norm = self.normalize_buoy(item, default_source_mode=item.get("source_mode", "BUNDLED_REFERENCE"))
                 if norm:
                     self.buoy_stations.append(norm)
                     self._buoys_by_id[norm["id"]] = norm
                     if pid not in seen_ids:
-                        self.real_profiles.append(norm)
+                        if norm.get("source_mode") == "REAL_LOCAL":
+                            self.real_profiles.append(norm)
                         self._profiles_by_id[norm["id"]] = norm
                         seen_ids.add(norm["id"])
         except Exception:
@@ -610,10 +613,14 @@ class InsituDataService:
             return []
 
         buoys = list(self.buoy_stations)
-        if source_mode and source_mode not in ("ALL", "REAL_LOCAL"):
+        if source_mode and source_mode != "ALL":
             buoys = [b for b in buoys if b.get("source_mode") == source_mode]
         if qc_filter:
-            buoys = [b for b in buoys if b.get("qc_summary", {}).get("pass_rate_pct", 100) >= 90.0]
+            buoys = [
+                b for b in buoys
+                if b.get("qc_summary") is not None
+                and b.get("qc_summary", {}).get("pass_rate_pct", 0) >= 90.0
+            ]
         return buoys
 
     def get_buoy_by_id(self, buoy_id: str) -> Optional[Dict[str, Any]]:

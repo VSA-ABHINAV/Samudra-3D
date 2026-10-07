@@ -43,7 +43,10 @@ class TestInsituRealIngest(unittest.TestCase):
         bd08 = next(b for b in buoys if b["id"] == "INCOIS_BUOY_BD08")
         self.assertEqual(bd08["lat"], 18.15)
         self.assertEqual(bd08["lon"], 89.67)
-        self.assertEqual(bd08["metadata"]["provenance_badge"], "[REAL • INCOIS]")
+        self.assertEqual(bd08["metadata"]["provenance_badge"], "[REFERENCE • BUNDLED]")
+        self.assertEqual(bd08["source_mode"], "BUNDLED_REFERENCE")
+        self.assertIsNone(bd08.get("timestamp"))
+        self.assertIsNone(bd08.get("qc_flags"))
         self.assertIn(500.0, bd08["depths"])
         self.assertEqual(len(bd08["depths"]), len(bd08["temperature"]))
 
@@ -102,10 +105,10 @@ class TestInsituRealIngest(unittest.TestCase):
         resp_real = client.get("/api/insitu/profiles?source_mode=REAL_LOCAL")
         self.assertEqual(resp_real.status_code, 200)
         real_profiles = resp_real.json()
-        self.assertGreaterEqual(len(real_profiles), 6)
+        self.assertGreaterEqual(len(real_profiles), 1)
         real_ids = [p["id"] for p in real_profiles]
         self.assertIn("ARGO_2902210_REAL", real_ids)
-        self.assertIn("INCOIS_BUOY_BD08", real_ids)
+        # INCOIS reference buoys are BUNDLED_REFERENCE
 
         # 3. ALL: union of synthetic, real, and custom sensors
         resp_all = client.get("/api/insitu/profiles?source_mode=ALL")

@@ -126,17 +126,18 @@ export function cleanProfileData(depths = [], values = [], qcFlags = []) {
   }
 
   const raw = [];
+  const flags = Array.isArray(qcFlags) ? qcFlags : [];
   const n = Math.min(depths.length, values.length);
   for (let i = 0; i < n; i++) {
     const d = depths[i];
     const v = values[i];
-    const qc = qcFlags[i] ?? 1;
+    const qc = flags[i] !== undefined ? flags[i] : (qcFlags === null ? null : 1);
     if (d !== null && d !== undefined && !isNaN(d) && v !== null && v !== undefined && !isNaN(v)) {
       raw.push({
         depth: Number(d),
         value: Number(v),
-        qcFlag: Number(qc),
-        isGood: qc === 1 || qc === 2,
+        qcFlag: qc,
+        isGood: qc === 1 || qc === 2 || qc === null,
         originalIndex: i
       });
     }
