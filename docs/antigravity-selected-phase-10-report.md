@@ -7,7 +7,7 @@
 - **Phase 09 Acceptance Commit**: `9d154bd84a01baa898eef3e43ff94b074c432b12` (`docs(phase-09): record Codex Phase 09 acceptance and update plan`).
 - **Phase 10 Implementation Commit**: `121664da84e618caf3879139372d9e57d716a877` (`feat(phase-10): implement local buoy observation browsing and station inspection`).
 - **Phase 10 Corrections Commit (01)**: `b0d0a309a9ee0bfe2dacc7a9e913f5ec51470984` (`fix(phase-10): classify bundled buoy reference records and eliminate timestamp and qc fabrication`).
-- **Phase 10 Corrections Commit (02)**: `<TO_BE_RECORDED_AFTER_COMMIT>`
+- **Phase 10 Corrections Commit (02)**: `749ca5cc07587ecca519625b6a45e00beaabf641` (`fix(phase-10): default local incois json records to real_local provenance and badge`).
 - **Corrections Summary**: Corrected built-in buoy reference catalog classification to `BUNDLED_REFERENCE` with badge `[REFERENCE • BUNDLED]` and note `"Bundled reference sample · illustrative, not live"`. Eliminated timestamp fabrication (`datetime.now()`), keeping observation times absent (`None`) when missing in source. Removed manufactured all-good QC flags and unverified 100% pass rates, presenting honest `"Unavailable"` and `"QC: Not reported"` states in the Observation Drawer and Profile Modal. Corrected local JSON ingestion so untagged JSON records parsed from `raw/incois/*.json` default to `REAL_LOCAL` with `[REAL • LOCAL_FILE]` badge and local filename provenance notes without falling back to bundled reference badges. Preserved true local-file provenance (`REAL_LOCAL`, `[REAL • LOCAL_FILE]`) and source metadata for files parsed from disk.
 
 ---
