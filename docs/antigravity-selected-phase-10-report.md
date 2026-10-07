@@ -6,7 +6,7 @@
 - **Status**: Ready for Codex review (Phase 10 corrections).
 - **Phase 09 Acceptance Commit**: `9d154bd84a01baa898eef3e43ff94b074c432b12` (`docs(phase-09): record Codex Phase 09 acceptance and update plan`).
 - **Phase 10 Implementation Commit**: `121664da84e618caf3879139372d9e57d716a877` (`feat(phase-10): implement local buoy observation browsing and station inspection`).
-- **Phase 10 Corrections Commit**: `<TO_BE_RECORDED_AFTER_COMMIT>`
+- **Phase 10 Corrections Commit**: `b0d0a309a9ee0bfe2dacc7a9e913f5ec51470984` (`fix(phase-10): classify bundled buoy reference records and eliminate timestamp and qc fabrication`).
 - **Corrections Summary**: Corrected built-in buoy reference catalog classification to `BUNDLED_REFERENCE` with badge `[REFERENCE • BUNDLED]` and note `"Bundled reference sample · illustrative, not live"`. Eliminated timestamp fabrication (`datetime.now()`), keeping observation times absent (`None`) when missing in source. Removed manufactured all-good QC flags and unverified 100% pass rates, presenting honest `"Unavailable"` and `"QC: Not reported"` states in the Observation Drawer and Profile Modal. Preserved true local-file provenance (`REAL_LOCAL`, `[REAL • LOCAL_FILE]`) and source metadata for files parsed from disk.
 
 ---
