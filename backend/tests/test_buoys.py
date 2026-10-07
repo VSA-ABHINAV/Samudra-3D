@@ -152,6 +152,36 @@ def test_buoy_suite():
         assert any(b["id"] == "INCOIS_BUOY_LOCAL_BD12" for b in local_buoys)
         print("[OK] Genuinely local-file buoy station verified with REAL_LOCAL provenance, timestamp, and QC")
 
+        # 6b. Bare local JSON file test (no source_mode, no provenance_badge, no provenance_note, no metadata)
+        bare_buoy_record = {
+            "id": "INCOIS_BUOY_LOCAL_BARE",
+            "platform_type": "buoy",
+            "name": "INCOIS Bare Local Buoy",
+            "wmo_id": "23099",
+            "lat": 16.0,
+            "lon": 85.0,
+            "depths": [0.5, 15.0],
+            "temperature": [28.0, 26.5],
+            "salinity": [33.0, 33.8]
+        }
+        with open(incois_dir / "bare_buoy.json", "w", encoding="utf-8") as f:
+            json.dump(bare_buoy_record, f)
+
+        service_bare = InsituDataService(raw_data_dir=raw_root)
+        bare_found = service_bare.get_buoy_by_id("INCOIS_BUOY_LOCAL_BARE")
+        assert bare_found is not None, "Bare local file buoy must be loaded"
+        assert bare_found["source_mode"] == "REAL_LOCAL", "Bare local JSON record must default to REAL_LOCAL"
+        assert bare_found["provenance_badge"] == "[REAL • LOCAL_FILE]", "Bare local JSON record must receive [REAL • LOCAL_FILE] badge"
+        assert "bare_buoy.json" in (bare_found.get("provenance_note") or ""), "Provenance note must identify local file"
+
+        # Verify bundled reference buoys remain BUNDLED_REFERENCE alongside bare local buoy
+        bd08_alongside = service_bare.get_buoy_by_id("INCOIS_BUOY_BD08")
+        assert bd08_alongside is not None
+        assert bd08_alongside["source_mode"] == "BUNDLED_REFERENCE"
+        assert bd08_alongside["provenance_badge"] == "[REFERENCE • BUNDLED]"
+        assert bd08_alongside["provenance_note"] == "Bundled reference sample · illustrative, not live"
+        print("[OK] Bare local JSON buoy record without provenance metadata correctly defaults to REAL_LOCAL and [REAL • LOCAL_FILE] while preserving BUNDLED_REFERENCE")
+
     # 7. Missing measurements handling (station without meteorological or deep observations)
     missing_station = {
         "id": "INCOIS_BUOY_TEST_MINIMAL",

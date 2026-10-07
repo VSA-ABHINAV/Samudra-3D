@@ -218,6 +218,44 @@ class TestInsituRealIngest(unittest.TestCase):
             # Ensure no nonexistent IDs are present
             self.assertIsNone(service.get_profile_by_id("NONEXISTENT_FLOAT"))
 
+    def test_08_incois_bare_local_json_ingest(self):
+        """Tests that local INCOIS JSON files lacking provenance fields default to REAL_LOCAL with [REAL • LOCAL_FILE] badge."""
+        import tempfile
+        import json
+        from backend.app.services.insitu_service import InsituDataService
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_root = Path(tmpdir)
+            incois_dir = raw_root / "incois"
+            incois_dir.mkdir(parents=True)
+
+            bare_buoy = {
+                "id": "INCOIS_BUOY_LOCAL_UNTAGGED",
+                "platform_type": "buoy",
+                "name": "INCOIS Untagged Local Buoy",
+                "wmo_id": "23088",
+                "lat": 17.5,
+                "lon": 86.5,
+                "depths": [0.5, 10.0],
+                "temperature": [29.0, 28.0],
+                "salinity": [33.5, 34.0]
+            }
+            with open(incois_dir / "untagged_buoy.json", "w", encoding="utf-8") as f:
+                json.dump(bare_buoy, f)
+
+            service = InsituDataService(raw_data_dir=raw_root)
+            found = service.get_buoy_by_id("INCOIS_BUOY_LOCAL_UNTAGGED")
+            self.assertIsNotNone(found, "Untagged local JSON buoy must be loaded")
+            self.assertEqual(found["source_mode"], "REAL_LOCAL")
+            self.assertEqual(found["provenance_badge"], "[REAL • LOCAL_FILE]")
+            self.assertIn("untagged_buoy.json", found.get("provenance_note", ""))
+
+            # Verify bundled reference buoy alongside it remains BUNDLED_REFERENCE
+            bd08 = service.get_buoy_by_id("INCOIS_BUOY_BD08")
+            self.assertIsNotNone(bd08)
+            self.assertEqual(bd08["source_mode"], "BUNDLED_REFERENCE")
+            self.assertEqual(bd08["provenance_badge"], "[REFERENCE • BUNDLED]")
+
 
 if __name__ == "__main__":
     unittest.main()

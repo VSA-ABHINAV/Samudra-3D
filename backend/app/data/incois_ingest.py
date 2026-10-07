@@ -229,10 +229,23 @@ def scan_incois_directory(raw_dir: Optional[Path] = None) -> List[Dict[str, Any]
             try:
                 with open(json_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    if isinstance(data, list):
-                        buoys.extend(data)
-                    elif isinstance(data, dict):
-                        buoys.append(data)
+                    items = data if isinstance(data, list) else [data]
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        entry = dict(item)
+                        # Default local JSON records to REAL_LOCAL with local file badge and provenance note
+                        entry.setdefault("source_mode", "REAL_LOCAL")
+                        entry.setdefault("provenance_badge", "[REAL • LOCAL_FILE]")
+                        entry.setdefault("provenance_note", f"Parsed from local file {json_file.name}")
+                        meta = dict(entry.get("metadata", {}))
+                        meta.setdefault("source", "INCOIS OMNI Network (Local File)")
+                        meta.setdefault("file", json_file.name)
+                        meta.setdefault("source_mode", "REAL_LOCAL")
+                        meta.setdefault("provenance_badge", "[REAL • LOCAL_FILE]")
+                        meta.setdefault("provenance_note", f"Parsed from local file {json_file.name}")
+                        entry["metadata"] = meta
+                        buoys.append(entry)
             except Exception:
                 continue
 

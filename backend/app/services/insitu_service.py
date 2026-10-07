@@ -243,9 +243,16 @@ class InsituDataService:
 
         qc_summary = self.compute_qc_summary(qc_flags).model_dump() if qc_flags is not None else None
         metadata = dict(raw.get("metadata", {}))
-        source_mode = raw.get("source_mode") or metadata.get("source_mode", default_source_mode)
-        provenance_badge = raw.get("provenance_badge") or metadata.get("provenance_badge", "[REFERENCE • BUNDLED]")
+        source_mode = raw.get("source_mode") or metadata.get("source_mode") or default_source_mode
+        default_badge = "[REAL • LOCAL_FILE]" if source_mode == "REAL_LOCAL" else "[REFERENCE • BUNDLED]"
+        provenance_badge = raw.get("provenance_badge") or metadata.get("provenance_badge") or default_badge
         provenance_note = raw.get("provenance_note") or metadata.get("provenance_note")
+        if not provenance_note:
+            if source_mode == "REAL_LOCAL":
+                file_name = metadata.get("file")
+                provenance_note = f"Parsed from local file {file_name}" if file_name else "Parsed from local file"
+            elif source_mode == "BUNDLED_REFERENCE":
+                provenance_note = "Bundled reference sample · illustrative, not live"
         provider = raw.get("provider") or metadata.get("provider", "INCOIS")
 
         wmo_id = raw.get("wmo_id") or metadata.get("wmo_id")

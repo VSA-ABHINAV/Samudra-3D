@@ -6,8 +6,9 @@
 - **Status**: Ready for Codex review (Phase 10 corrections).
 - **Phase 09 Acceptance Commit**: `9d154bd84a01baa898eef3e43ff94b074c432b12` (`docs(phase-09): record Codex Phase 09 acceptance and update plan`).
 - **Phase 10 Implementation Commit**: `121664da84e618caf3879139372d9e57d716a877` (`feat(phase-10): implement local buoy observation browsing and station inspection`).
-- **Phase 10 Corrections Commit**: `b0d0a309a9ee0bfe2dacc7a9e913f5ec51470984` (`fix(phase-10): classify bundled buoy reference records and eliminate timestamp and qc fabrication`).
-- **Corrections Summary**: Corrected built-in buoy reference catalog classification to `BUNDLED_REFERENCE` with badge `[REFERENCE • BUNDLED]` and note `"Bundled reference sample · illustrative, not live"`. Eliminated timestamp fabrication (`datetime.now()`), keeping observation times absent (`None`) when missing in source. Removed manufactured all-good QC flags and unverified 100% pass rates, presenting honest `"Unavailable"` and `"QC: Not reported"` states in the Observation Drawer and Profile Modal. Preserved true local-file provenance (`REAL_LOCAL`, `[REAL • LOCAL_FILE]`) and source metadata for files parsed from disk.
+- **Phase 10 Corrections Commit (01)**: `b0d0a309a9ee0bfe2dacc7a9e913f5ec51470984` (`fix(phase-10): classify bundled buoy reference records and eliminate timestamp and qc fabrication`).
+- **Phase 10 Corrections Commit (02)**: `<TO_BE_RECORDED_AFTER_COMMIT>`
+- **Corrections Summary**: Corrected built-in buoy reference catalog classification to `BUNDLED_REFERENCE` with badge `[REFERENCE • BUNDLED]` and note `"Bundled reference sample · illustrative, not live"`. Eliminated timestamp fabrication (`datetime.now()`), keeping observation times absent (`None`) when missing in source. Removed manufactured all-good QC flags and unverified 100% pass rates, presenting honest `"Unavailable"` and `"QC: Not reported"` states in the Observation Drawer and Profile Modal. Corrected local JSON ingestion so untagged JSON records parsed from `raw/incois/*.json` default to `REAL_LOCAL` with `[REAL • LOCAL_FILE]` badge and local filename provenance notes without falling back to bundled reference badges. Preserved true local-file provenance (`REAL_LOCAL`, `[REAL • LOCAL_FILE]`) and source metadata for files parsed from disk.
 
 ---
 
@@ -17,14 +18,14 @@
 1. **`backend/app/data/incois_ingest.py`**:
    - Updated `INCOIS_REFERENCE_BUOYS`: Assigned `source_mode="BUNDLED_REFERENCE"`, `provenance_badge="[REFERENCE • BUNDLED]"`, and `provenance_note="Bundled reference sample · illustrative, not live"`.
    - Updated `parse_incois_netcdf()`: Parsed actual source time and QC variables if present; otherwise left `timestamp=None` and `qc_flags=None`. Set `source_mode="REAL_LOCAL"` and `provenance_badge="[REAL • LOCAL_FILE]"`.
-   - Updated `scan_incois_directory()`: Removed `datetime.now()` and all-good QC injection for reference catalog items.
+   - Updated `scan_incois_directory()`: Configured scanned local JSON files to default to `source_mode="REAL_LOCAL"`, `provenance_badge="[REAL • LOCAL_FILE]"`, and provenance note `f"Parsed from local file {json_file.name}"` when not provided in the source file. Removed `datetime.now()` and all-good QC injection for reference catalog items.
 
 2. **`backend/app/schemas/insitu.py`**:
    - `BuoySummary`: Updated `timestamp: Optional[str] = None`, `qc_summary: Optional[QCFlagSummary] = None`, `source_mode: str = "BUNDLED_REFERENCE"`, `provenance_badge: str = "[REFERENCE • BUNDLED]"`, and added `provenance_note: Optional[str] = None`.
    - `BuoyDetail`: Updated `timestamp: Optional[str] = None`, `qc_flags: Optional[List[int]] = None`, `qc_summary: Optional[QCFlagSummary] = None`, `source_mode: str = "BUNDLED_REFERENCE"`, `provenance_badge: str = "[REFERENCE • BUNDLED]"`, and added `provenance_note: Optional[str] = None`.
 
 3. **`backend/app/services/insitu_service.py`**:
-   - Updated `normalize_buoy()`: Defaulted source mode to `BUNDLED_REFERENCE` and provenance badge to `[REFERENCE • BUNDLED]`. Preserved `raw.get("timestamp")` without substituting `datetime.now()`. Computed `qc_summary` only if source `qc_flags` is present, otherwise kept `qc_summary=None`.
+   - Updated `normalize_buoy()`: Resolved provenance badge dynamically based on `source_mode` (`[REAL • LOCAL_FILE]` for `REAL_LOCAL`, `[REFERENCE • BUNDLED]` for `BUNDLED_REFERENCE`). Attached appropriate provenance notes naming local files. Preserved `raw.get("timestamp")` without substituting `datetime.now()`. Computed `qc_summary` only if source `qc_flags` is present, otherwise kept `qc_summary=None`.
    - Updated `get_buoy_stations()`: Supported explicit source modes (`BUNDLED_REFERENCE`, `REAL_LOCAL`, `ALL`), cleanly returned `[]` on `SYNTHETIC`, and safely checked `qc_summary` before evaluating `qc_filter`.
    - Updated `load_observations()`: Categorized reference buoys as `BUNDLED_REFERENCE` and disk-parsed NetCDF/JSON buoys as `REAL_LOCAL`.
 
@@ -48,14 +49,14 @@
 
 | Suite / Gate | Command | Result / Exact Counts |
 |---|---|---|
-| Backend Test Suite | `python -m unittest discover -s backend/tests -p "test_*.py"` | **103 passed, 2 skipped (0 failures)** |
-| Backend Buoy Contract Tests | `python backend/tests/test_buoys.py` | **100% passed (7 test sections)** |
-| Backend Real Ingest Suite | `python -m unittest backend/tests/test_insitu_real_ingest.py` | **7 passed (0 failures)** |
+| Backend Test Suite | `python -m unittest discover -s backend/tests -p "test_*.py"` | **104 passed, 2 skipped (0 failures)** |
+| Backend Buoy Contract Tests | `python backend/tests/test_buoys.py` | **100% passed (includes bare local JSON test)** |
+| Backend Real Ingest Suite | `python -m unittest backend/tests/test_insitu_real_ingest.py` | **8 passed (0 failures)** |
 | Frontend Lint | `npm run lint` (in `frontend/`) | **0 warnings, 0 errors (Clean)** |
-| Frontend Build | `npm run build` (in `frontend/`) | **Built successfully in 1.50s** |
+| Frontend Build | `npm run build` (in `frontend/`) | **Built successfully in 2.12s** |
 | Transition Queue Unit Tests | `node tests/transitionQueue.test.js` (in `frontend/`) | **2 passed, 0 failed** |
-| Playwright Phase 10 Suite | `npx playwright test tests/selected-phase-10.spec.js` | **4 passed (38.7s)** |
-| Playwright Regression Suite | `npx playwright test tests/selected-phase-08.spec.js tests/selected-phase-09.spec.js tests/selected-phase-10.spec.js` | **20 passed (36.0s)** |
+| Playwright Phase 10 Suite | `npx playwright test tests/selected-phase-10.spec.js` | **4 passed (16.0s)** |
+| Playwright Regression Suite | `npx playwright test tests/selected-phase-08.spec.js tests/selected-phase-09.spec.js tests/selected-phase-10.spec.js` | **20 passed (39.1s)** |
 | Git Diff Check | `git diff --check` | **0 issues (clean)** |
 
 ---
