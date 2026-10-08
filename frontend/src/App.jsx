@@ -15,6 +15,7 @@ import SensorRegistrationModal from './components/SensorRegistrationModal.jsx';
 import LoginPage from './components/LoginPage.jsx';
 import AdminPortal from './components/AdminPortal.jsx';
 import AuthGate from './components/AuthGate.jsx';
+import HomePage from './components/HomePage.jsx';
 import DatasetManagerModal from './components/DatasetManagerModal.jsx';
 import FishermanModeModal from './components/FishermanModeModal.jsx';
 import CycloneModeModal from './components/CycloneModeModal.jsx';
@@ -240,12 +241,12 @@ export default function App() {
     }
   });
 
-  // Path-based routing: /login, /admin, /app (default: /app)
+  // Path-based routing: /, /home, /app, /login, /admin (default: /)
   const [currentPath, setCurrentPath] = useState(() => {
     try {
-      return typeof window !== 'undefined' ? (window.location.pathname || '/app') : '/app';
+      return typeof window !== 'undefined' ? (window.location.pathname || '/') : '/';
     } catch {
-      return '/app';
+      return '/';
     }
   });
 
@@ -262,11 +263,12 @@ export default function App() {
 
   useEffect(() => {
     const handlePopState = () => {
-      setCurrentPath(window.location.pathname || '/app');
+      setCurrentPath(window.location.pathname || '/');
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
 
   // Hydrate officer session on mount if token is saved
   useEffect(() => {
@@ -1306,6 +1308,24 @@ export default function App() {
     setProbeData(null);
     setActiveTransect(null);
   }, []);
+
+  const isPublicHome = currentPath === '/home' || currentPath === '/portal' || currentPath === '/overview' || (currentPath === '/' && !currentUser);
+
+  if (isPublicHome) {
+    return (
+      <div className="app min-h-screen" data-theme={theme}>
+        <HomePage
+          currentUser={currentUser}
+          activeDataset={activeDataset}
+          onNavigate={handleNavigate}
+          onOpenSources={() => setIsSourcesOpen(true)}
+          theme={theme}
+          onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+        />
+        <DataSourcesModal isOpen={isSourcesOpen} onClose={() => setIsSourcesOpen(false)} />
+      </div>
+    );
+  }
 
   if (currentPath === '/login') {
     return (

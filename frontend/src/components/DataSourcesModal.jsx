@@ -162,6 +162,7 @@ export default function DataSourcesModal({ isOpen, onClose }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="data-sources-title"
+        data-testid="data-sources-modal"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="source-dialog-header">

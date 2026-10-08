@@ -6,6 +6,107 @@ const evidenceDir = path.resolve('test-results', 'screenshots');
 mkdirSync(evidenceDir, { recursive: true });
 
 test.describe('MoES/INCOIS Operational Authentication & RBAC Administration Suite', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/api/auth/login', async (route) => {
+      const postData = route.request().postDataJSON() || {};
+      if (postData.username === 'admin' && postData.password === 'Samudra#Admin2026!') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            access_token: 'valid-admin-auth-token',
+            token_type: 'bearer',
+            user: {
+              username: 'admin',
+              display_name: 'Lead Oceanographer',
+              role: 'ADMIN',
+              organization: 'INCOIS',
+              badge_color: '#0284c7'
+            }
+          })
+        });
+      } else {
+        await route.fulfill({
+          status: 401,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'Invalid credentials or account is disabled.' })
+        });
+      }
+    });
+
+    await page.route('**/api/auth/me', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          authenticated: true,
+          user: {
+            username: 'admin',
+            display_name: 'Lead Oceanographer',
+            role: 'ADMIN',
+            organization: 'INCOIS',
+            badge_color: '#0284c7'
+          }
+        })
+      });
+    });
+
+    await page.route('**/api/auth/logout', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true })
+      });
+    });
+
+    await page.route('**/api/admin/overview', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          status: 'Operational',
+          users_count: 5,
+          sensors_count: 12,
+          data_sources_count: 3,
+          model_loaded: true,
+          model_variable_count: 5
+        })
+      });
+    });
+
+    await page.route('**/api/admin/users', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ users: [], total: 0 })
+      });
+    });
+
+    await page.route('**/api/admin/sensors', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([])
+      });
+    });
+
+    await page.route('**/api/admin/data-sources', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([])
+      });
+    });
+
+    await page.route('**/api/admin/audit-logs*', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([])
+      });
+    });
+  });
+
   test('verifies official institutional branding and header controls', async ({ page }) => {
     await page.goto('/app');
 

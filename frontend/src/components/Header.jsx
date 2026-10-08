@@ -292,7 +292,19 @@ export default function Header({
   return (
     <header className="header scientific-header glassmorphic-panel" ref={menuRef}>
       {/* 1. Left: Brand & Institution */}
-      <div className="brand flex items-center gap-3">
+      <div
+        className="brand flex items-center gap-3 cursor-pointer hover:opacity-95 transition"
+        onClick={() => onNavigate?.('/home')}
+        title="SAMUDRA-3D Portal Overview (Return to Home)"
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onNavigate?.('/home');
+          }
+        }}
+      >
         <span className="brand-mark text-ocean-bright font-mono text-xl" aria-hidden="true">≈</span>
         <div>
           <div className="flex items-center gap-2">
@@ -636,6 +648,20 @@ export default function Header({
           <span>Ask SAMUDRA</span>
         </button>
 
+        {/* Admin Direct Button */}
+        {isAdmin && (
+          <button
+            type="button"
+            className="header-admin-btn hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-sky-950/80 border border-sky-700/60 text-sky-300 hover:bg-sky-900 transition"
+            onClick={() => onNavigate?.('/admin')}
+            data-testid="header-admin-portal-btn"
+            title="Open Administration Portal"
+          >
+            <span aria-hidden="true">⚙️</span>
+            <span>Admin Portal</span>
+          </button>
+        )}
+
         {/* User Session & Menu */}
         <div className="user-menu relative">
           <button
@@ -643,12 +669,16 @@ export default function Header({
             className="user-profile-btn flex items-center gap-2 p-1 rounded-full hover:bg-slate-800/80 transition"
             onClick={() => toggleMenu('USER')}
             aria-label="User account and clearance"
+            data-testid="open-login-btn"
           >
             <span
               className="user-avatar-circle flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold text-white shadow"
               style={{ backgroundColor: currentUser?.badge_color || '#0284c7' }}
             >
               {currentUser?.avatar_initials || (currentUser?.username ? currentUser.username.slice(0, 2).toUpperCase() : 'US')}
+            </span>
+            <span className="text-[11px] font-bold text-slate-300 pr-1 hidden sm:inline">
+              {currentUser?.role || 'VIEWER'}
             </span>
           </button>
 
@@ -666,6 +696,19 @@ export default function Header({
                 </div>
               </div>
 
+              <button
+                type="button"
+                className="dropdown-link-btn w-full text-left px-2 py-1.5 text-xs text-slate-200 hover:bg-sky-950/60 rounded flex items-center gap-2"
+                onClick={() => {
+                  onNavigate?.('/home');
+                  setActiveMenu(null);
+                }}
+                data-testid="user-menu-home-btn"
+              >
+                <span>🏠</span>
+                <span>Portal Overview</span>
+              </button>
+
               {isAdmin && (
                 <button
                   type="button"
@@ -674,6 +717,7 @@ export default function Header({
                     onNavigate?.('/admin');
                     setActiveMenu(null);
                   }}
+                  data-testid="user-menu-admin-btn"
                 >
                   <span>⚙️</span>
                   <span>Administration Portal</span>
@@ -687,6 +731,7 @@ export default function Header({
                   onLogout && onLogout();
                   setActiveMenu(null);
                 }}
+                data-testid="user-menu-signout-btn"
               >
                 <span>🚪</span>
                 <span>Sign Out</span>

@@ -39,11 +39,18 @@ Scientific arrays live in NetCDF files, not in user/session database tables. The
 - Bounding boxes constrain field requests. The source has a 100,000-cell slice limit and volume sample caps; global globe coverage does not mean global scientific coverage.
 - Both backend and frontend have caches. Dataset changes must invalidate/re-key cached scientific views and refresh their metadata.
 
-## Current screens and every main option
+## Current screens and verified options (Phase 12 Redesign)
 
-The source currently has path handling for `/app`, `/admin`, and the excluded `/login`. The root/default screen also renders the workspace. Most navigation items are menus, drawers or modals rather than separate routed pages. There is no separate public homepage in the reviewed implementation.
+The frontend implements path handling for `/` (Public Homepage for unauthenticated visitors / `/home` / `/portal`), `/app` (3D Ocean Workstation with strict AuthGate for unauthenticated users), `/login` (Institutional Login Page), and `/admin` (Administration Portal). The Public Homepage introduces confirmed workflows and provenance disclosures, providing clear paths to launch the workstation or log in.
 
-### Explore / main workspace
+### Public Homepage (`/` unauthenticated, `/home`, `/portal`)
+
+- **Hero & Branding**: Institutional MoES / INCOIS banner, active dataset indicator, and direct launch buttons.
+- **Workflow Showcase**: 6 confirmed workflow cards linking directly to Explore, Observations (Fleet), Analysis (Collocation), Deep Ocean Physics & Acoustics, Data Management (Downloader & Registry), and Operations & AI Assistant.
+- **Scientific Truthfulness Disclosure**: Transparently declares historical Copernicus GLORYS12V1 and Synthetic ROMS model domains, highlighting the Offline Integration Gap (no live external polling/ERDDAP scraping) and model SST gradient proxies.
+- **Navigation & Specs**: Integrated shortcuts to Data Sources & Specifications modal, Institutional Login, and Workstation.
+
+### Explore / main workspace (`/app`)
 
 | Option | Actual behavior |
 |---|---|
@@ -54,10 +61,10 @@ The source currently has path handling for `/app`, `/admin`, and the excluded `/
 | CURRENTS | Displays horizontal velocity/speed derived from eastward and northward components; activates current particles |
 | Depth controls | Select nearest available model depth and request that horizontal slice |
 | Date/time controls | Select stored dataset time index |
-| Play/pause, back/forward, speed | Animate through stored time steps; buffering pauses advancement; loop state is currently always enabled in App |
-| Observations | Opens/closes fleet drawer and enables Argo/glider layers; current handler does not turn the layers off when closing |
-| Anomalies | Toggles sparse model-minus-observation residual points |
-| Search | Searches a local place catalog or parses latitude/longitude; WMO search is advertised but not implemented in the header handler |
+| Play/pause, back/forward, speed | Animate through stored time steps; buffering pauses advancement; loop state is currently enabled in App |
+| Observations | Opens/closes fleet drawer; independent layer toggles for Argo, Gliders, and Buoys |
+| Anomalies | Toggles 3D sparse model-minus-observation residual points with configurable temperature/salinity thresholds |
+| Search | Searches local place catalog, parses latitude/longitude, and searches Argo floats by 5-7 digit WMO ID |
 | Basin presets | Move the camera to a predefined sea/region |
 | Zoom/reset/full view | Change camera or workspace display; no new scientific calculation |
 | Graticules / labels | Toggle coordinate grid and geographic labels |
@@ -65,16 +72,16 @@ The source currently has path handling for `/app`, `/admin`, and the excluded `/
 | Color scale | Dynamic range uses current slice extrema; fixed range gives comparable colors across views |
 | Volume full / slice / surface | Switch the volume display mode and selected depth plane |
 | Click ocean point | Requests the selected location's water column for the main time index |
-| Coordinate inspector | Shows coordinates, source/date, surface temperature/salinity, derived MLD/D20 and nearest observation when supplied |
-| CTD PROFILE | Intended to inspect the selected location's vertical profile; currently not connected correctly to a probe profile |
-| COMPARE MODEL | Opens the observation comparison modal; current probe action does not select the nearest observed profile automatically |
+| Coordinate inspector | Shows coordinates, source/date, surface temperature/salinity, derived MLD/D20 and nearest observation |
+| CTD PROFILE | Inspects the probed location's vertical profile (or land/outside domain error state) in the Profile Modal |
+| COMPARE MODEL | Opens the observation comparison modal with the probed location's nearest observation |
 | Deep Ocean Physics | Opens coordinate-based derived analysis |
 
 ### Observations and profile inspector
 
-Fleet drawer offers All, Argo, Glider and Buoy filters plus text search. Each card offers selection, camera focus, profile and model comparison. Argo/glider lists are loaded when enabled. The buoy filter currently has no buoy input: the drawer only combines Argo and glider arrays.
+Fleet drawer offers All, Argo, Glider and Buoy filters plus text search. Each card offers selection, camera focus, profile and model comparison. Argo, glider, and buoy lists are loaded and filtered cleanly with honest provenance indicators.
 
-Profile inspector supports temperature-versus-depth, salinity-versus-depth, and temperature-versus-salinity diagrams with density contours. A model overlay can fetch collocation results for the observation. Quality flags matter: bad observations should not become continuous valid curves or comparison pairs.
+Profile inspector supports temperature-versus-depth, salinity-versus-depth, and temperature-versus-salinity diagrams with density contours. A model overlay can fetch collocation results for the observation. Quality flags matter: bad observations are excluded from continuous curves and comparison pairs.
 
 Observation time/depth can differ from the model window. A deep Argo profile does not extend the model's depth coverage. Unsupported comparison levels remain unavailable.
 
