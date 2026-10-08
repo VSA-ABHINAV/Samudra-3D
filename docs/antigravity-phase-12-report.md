@@ -3,6 +3,7 @@
 ## 1. Commit Hashes
 - **Phase 11 Report Correction Commit**: `7fd2d473241b2583090c86dc94781d7e285c61c6` (`docs(phase-11): record verified correction commit hash and independent checks in report`)
 - **Phase 12 Redesign Commit**: `7650369e780ed099b47ae40272b479270e2cf526` (`feat(phase-12): redesign frontend with public homepage, unified navigation, and verified workflow routing`)
+- **Phase 12 Style Polish Commit**: `49ebc3e0310fa095a43b355835c67c5e219fb06b` (`style(phase-12): clean up trailing whitespace in HomePage.jsx`)
 
 ---
 
