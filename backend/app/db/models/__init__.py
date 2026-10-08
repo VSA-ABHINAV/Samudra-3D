@@ -11,8 +11,7 @@ from backend.app.db.models.observations import (
     ObservationMeasurement,
     GliderTransect
 )
-from backend.app.db.models.locations import Location, SavedLocation
-from backend.app.db.models.analysis import AnalysisRun, CollocationResult, Anomaly
+from backend.app.db.models.locations import Location
 from backend.app.db.models.jobs import DownloadJob, CacheEntry
 
 __all__ = [
@@ -30,10 +29,6 @@ __all__ = [
     "ObservationMeasurement",
     "GliderTransect",
     "Location",
-    "SavedLocation",
-    "AnalysisRun",
-    "CollocationResult",
-    "Anomaly",
     "DownloadJob",
     "CacheEntry"
 ]

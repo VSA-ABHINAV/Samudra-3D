@@ -387,10 +387,10 @@ export default function AdminPortal({ currentUser, authToken, onNavigate, onLogo
               </div>
               <div style={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px', padding: '16px' }}>
                 <span style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Data Sources</span>
-                <div style={{ fontSize: '20px', fontWeight: 700, color: '#a855f7', marginTop: '6px' }}>
-                  {overviewData?.stats?.total_data_sources ?? '3'} Connected
+                <div style={{ fontSize: '20px', fontWeight: 700, color: '#a855f7', marginTop: '6px' }} data-testid="admin-data-sources-stat">
+                  {overviewData?.stats?.total_data_sources ?? overviewData?.data_sources_count ?? '3'} Catalogued
                 </div>
-                <span style={{ fontSize: '11px', color: '#64748b' }}>ROMS, INCOIS DAC, ERDDAP</span>
+                <span style={{ fontSize: '11px', color: '#64748b' }}>ROMS Model, Argo DAC, Seagliders (ERDDAP Offline)</span>
               </div>
             </div>
 

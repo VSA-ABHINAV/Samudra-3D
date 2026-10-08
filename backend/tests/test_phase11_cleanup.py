@@ -3,8 +3,9 @@ Tests for Phase 11: Excluded-Feature Cleanup and Retained Shared Workflows
 Verifies that:
 1. Excluded features (Live external feeds, Saved locations/analyses) have no active/dedicated public routes.
 2. Truthful OFFLINE_INTEGRATION_GAP status is preserved.
-3. Database tables and rows remain intact (no drop tables or data loss).
-4. Retained core endpoints (model data, observations, buoys, collation, anomaly, auth, admin, dataset downloads) function correctly.
+3. Dedicated saved-feature ORM exports (SavedLocation, AnalysisRun, CollocationResult, Anomaly) are absent from models.
+4. Database tables and rows remain intact (no drop tables or data loss).
+5. Retained core endpoints (model data, observations, buoys, collation, anomaly, auth, admin, dataset downloads) function correctly.
 """
 import unittest
 from fastapi.testclient import TestClient
@@ -53,12 +54,12 @@ class TestPhase11ExcludedCleanup(unittest.TestCase):
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
-            
+
             # Check users table
             cursor.execute("SELECT COUNT(*) as cnt FROM users")
             user_cnt = cursor.fetchone()["cnt"]
             self.assertGreater(user_cnt, 0, "Users table must not be empty or dropped")
-            
+
             # Check data_sources table
             cursor.execute("SELECT COUNT(*) as cnt FROM data_sources")
             ds_cnt = cursor.fetchone()["cnt"]
@@ -71,20 +72,29 @@ class TestPhase11ExcludedCleanup(unittest.TestCase):
         finally:
             conn.close()
 
-        # Verify SQLAlchemy models remain defined in the database package
-        from backend.app.db.models import Location, SavedLocation, AnalysisRun, CollocationResult, Anomaly
-        self.assertEqual(SavedLocation.__tablename__, "saved_locations")
-        self.assertEqual(Location.__tablename__, "locations")
-        self.assertEqual(AnalysisRun.__tablename__, "analysis_runs")
-        self.assertEqual(CollocationResult.__tablename__, "collocation_results")
-        self.assertEqual(Anomaly.__tablename__, "anomalies")
+    def test_excluded_orm_exports_absent_and_shared_location_retained(self):
+        """Verify excluded ORM model classes are absent from exports and shared Location is preserved."""
+        import backend.app.db.models as db_models
+        import backend.app.db as db_package
+
+        # Excluded ORM exports must not be in __all__ or module attributes
+        for name in ["SavedLocation", "AnalysisRun", "CollocationResult", "Anomaly"]:
+            self.assertNotIn(name, db_models.__all__, f"{name} must not be exported in db.models.__all__")
+            self.assertFalse(hasattr(db_models, name), f"{name} must not exist on db.models")
+            self.assertNotIn(name, db_package.__all__, f"{name} must not be exported in db.__all__")
+            self.assertFalse(hasattr(db_package, name), f"{name} must not exist on db package")
+
+        # Shared Location model must remain exported and functional
+        self.assertIn("Location", db_models.__all__)
+        self.assertTrue(hasattr(db_models, "Location"))
+        self.assertEqual(db_models.Location.__tablename__, "locations")
 
     def test_retained_routes_functional(self):
         """Verify that all retained core endpoints operate correctly."""
         # 1. System health & metadata
         resp = self.client.get("/api/health")
         self.assertEqual(resp.status_code, 200)
-        
+
         resp = self.client.get("/api/metadata")
         self.assertEqual(resp.status_code, 200)
 

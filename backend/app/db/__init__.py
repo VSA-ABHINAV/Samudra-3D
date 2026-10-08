@@ -18,10 +18,6 @@ from backend.app.db.models import (
     ObservationMeasurement,
     GliderTransect,
     Location,
-    SavedLocation,
-    AnalysisRun,
-    CollocationResult,
-    Anomaly,
     DownloadJob,
     CacheEntry
 )
@@ -48,10 +44,6 @@ __all__ = [
     "ObservationMeasurement",
     "GliderTransect",
     "Location",
-    "SavedLocation",
-    "AnalysisRun",
-    "CollocationResult",
-    "Anomaly",
     "DownloadJob",
     "CacheEntry"
 ]

@@ -1,9 +1,7 @@
 """
-SAMUDRA-3D Geographical Locations and User-Saved Locations Models
+SAMUDRA-3D Geographical Locations Preset Model
 """
-from datetime import datetime, timezone
-from sqlalchemy import Column, String, Float, DateTime, ForeignKey, JSON
-from sqlalchemy.orm import relationship
+from sqlalchemy import Column, String, Float, JSON
 from backend.app.db.database import Base
 
 class Location(Base):
@@ -17,16 +15,3 @@ class Location(Base):
     zoom_distance = Column(Float, default=150.0, nullable=False)
     bbox = Column(JSON, default=dict, nullable=True) # {lat_min, lat_max, lon_min, lon_max}
     description = Column(String(256), nullable=True)
-
-class SavedLocation(Base):
-    __tablename__ = "saved_locations"
-
-    id = Column(String(64), primary_key=True, index=True)
-    user_id = Column(String(64), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    name = Column(String(128), nullable=False)
-    lat = Column(Float, nullable=False)
-    lon = Column(Float, nullable=False)
-    zoom_distance = Column(Float, default=150.0, nullable=False)
-    depth_m = Column(Float, default=0.0, nullable=False)
-    variable = Column(String(32), default="temperature", nullable=False)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
