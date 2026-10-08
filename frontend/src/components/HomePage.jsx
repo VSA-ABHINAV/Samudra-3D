@@ -4,7 +4,7 @@ import { getDatasetProvenance } from '../utils/scientificPresentation.js';
 /**
  * HomePage - Public Institutional Portal for SAMUDRA-3D
  * Ministry of Earth Sciences (MoES) / INCOIS Operational Ocean Information System
- * 
+ *
  * Provides a clear public entry point introducing:
  * - 3D Ocean Exploration (Globe & Regional Volume)
  * - In-Situ Observation Fleet (Argo, Gliders, Buoys, CTD Profiles)
@@ -13,7 +13,7 @@ import { getDatasetProvenance } from '../utils/scientificPresentation.js';
  * - NetCDF4 Data Management & Subset Downloader
  * - Operational Views (Fisherman View & Cyclone Conditions)
  * - AI Ocean Assistant (Ask SAMUDRA)
- * 
+ *
  * Transparently communicates system capabilities, historical model provenance,
  * and offline integration boundaries.
  */
