@@ -148,7 +148,7 @@ Admin-only portal offers overview, user management, sensor platform management, 
 | Coordinate data | `GET /api/location/availability`, `/api/ocean/point`, `/api/ocean/profile`, `/api/ocean/probe` |
 | Regional / volume / section | `GET /api/ocean/region`, `/api/ocean/volume`, `/api/ocean/transect` |
 | Derived physics / fronts | `GET /api/ocean/in-depth-analysis`, `/api/ocean/thermal-fronts` |
-| Observation lists/details | `GET /api/insitu/profiles`, `/api/insitu/argo`, `/api/insitu/argo/{id}`, `/api/insitu/gliders`, `/api/insitu/gliders/{id}`, `/api/insitu/status` |
+| Observation lists/details | `GET /api/insitu/profiles`, `/api/insitu/argo`, `/api/insitu/argo/{id}`, `/api/insitu/gliders`, `/api/insitu/gliders/{id}`, `/api/insitu/buoys`, `/api/insitu/buoys/{id}`, `/api/insitu/status` |
 | Custom sensor records | `GET/POST /api/insitu/sensors`, `DELETE /api/insitu/sensors/{id}` |
 | Comparison | `GET /api/collocation/profile/{id}?time_strategy=linear|nearest`, `/api/collocation/glider/{id}`, `/api/collocation/health` |
 | Residual field | `GET /api/anomaly/field` with variable, threshold and depth range; `/api/anomaly/summary` |
@@ -158,6 +158,13 @@ Admin-only portal offers overview, user management, sensor platform management, 
 | Download lifecycle | `POST /api/datasets/download`, `GET /api/datasets/download/status/{job_id}`, `POST /api/datasets/download/cancel/{job_id}` |
 | File provenance | `GET /api/datasets/manifests`, `/api/datasets/manifests/{id}` |
 | Administration | `/api/admin/overview`, `/users`, `/sensors`, `/data-sources`, `/audit-logs` and their existing mutation routes |
+
+## Excluded Features Inventory and Final Status (Phase 11)
+
+| Excluded Feature | Scope & Status | Implementation Audit & Boundary |
+|---|---|---|
+| **Live external feeds** | Excluded | No external polling workers, live scrapers, or live feed routes exist. `/api/insitu/status` reports `erddap_live_feed: "OFFLINE_INTEGRATION_GAP"`. Satellite thermal fronts are computed locally from active model SST (`/api/ocean/thermal-fronts`) with clear model proxy badges. Cyclone mode enforces IMD source separation without live track fetching. |
+| **Saved locations and analyses** | Excluded | No public API routes (`/api/saved-locations`, `/api/saved-analyses`) or UI affordances exist. Location presets (`Location`) and database table structures (`saved_locations`, `analysis_runs`) remain preserved in SQLite/SQLAlchemy schemas without deleting tables or rows. |
 
 ## Wiring issues the redesign should not copy
 
