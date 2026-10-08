@@ -351,6 +351,32 @@ test.describe('Selected Phase 10 — Buoy Observations', () => {
     // Verify chart viewport renders
     await expect(modal.getByTestId('chart-viewport')).toBeVisible();
 
+    // Verify observation points in vertical depth chart have unknown QC styling and testid
+    const unknownPoints = modal.getByTestId('qc-unknown-point');
+    await expect(unknownPoints.first()).toBeVisible();
+    await expect(modal.getByTestId('qc-outlier-point')).toHaveCount(0);
+
+    // Hover over the first depth point to verify tooltip shows honest "QC: Not reported" and never "Good (Flag null)"
+    await unknownPoints.first().hover({ force: true });
+    const tooltip = modal.getByTestId('chart-tooltip');
+    await expect(tooltip).toBeVisible();
+    await expect(tooltip.getByTestId('tooltip-qc-status')).toHaveText('Not reported');
+    await expect(tooltip).not.toContainText('Good (Flag null)');
+    await expect(tooltip).not.toContainText('Good');
+
+    // Switch to T-S Diagram tab and verify unknown QC handling
+    const tsTab = modal.getByTestId('tab-ts');
+    await tsTab.click();
+    await expect(modal.getByTestId('ts-diagram-svg')).toBeVisible();
+    const tsUnknownPoints = modal.getByTestId('ts-qc-unknown-point');
+    await expect(tsUnknownPoints.first()).toBeVisible();
+    await expect(modal.getByTestId('ts-qc-outlier-point')).toHaveCount(0);
+
+    // Hover on T-S point and verify tooltip
+    await tsUnknownPoints.first().hover({ force: true });
+    await expect(tooltip.getByTestId('tooltip-qc-status')).toHaveText('Not reported');
+    await expect(tooltip).not.toContainText('Good (Flag null)');
+
     await page.screenshot({ path: path.join(evidenceDir, '02_buoy_profile_modal_inspection.png') });
   });
 

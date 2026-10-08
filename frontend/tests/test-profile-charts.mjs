@@ -96,8 +96,9 @@ assert.equal(scales.depthToY(1000), expectedMidY, 'Depth 1000m must map to verti
 console.log('✓ 4. Positive-down vertical depth axis inversion verified (0m at top)');
 
 // -----------------------------------------------------------------------------
-// 5. QC Flag Discontinuity and Broken Curve Gaps
+// 5. QC Flag Three-State Handling (Good, Bad, and Absent/Unknown)
 // -----------------------------------------------------------------------------
+// 5a. Bad/Outlier QC Flag Discontinuity and Broken Curve Gaps
 const testDepths = [0, 50, 100, 200, 500];
 const testValues = [28, 24, 99.9, 14, 8];
 const testQC = [1, 1, 4, 1, 1]; // Middle level (100m) is bad/outlier (flag 4)
@@ -106,6 +107,7 @@ const qcCleaned = cleanProfileData(testDepths, testValues, testQC);
 assert.equal(qcCleaned.hasGaps, true, 'hasGaps must be true when bad QC flags exist');
 assert.equal(qcCleaned.badCount, 1);
 assert.equal(qcCleaned.goodCount, 4);
+assert.equal(qcCleaned.unknownCount, 0);
 
 const { pathSegments, pointCoords } = generateProfileSvgPaths(
   qcCleaned.points,
@@ -128,8 +130,45 @@ assert.ok(pathSegments[1].startsWith('M '));
 const outlierPt = pointCoords.find((p) => p.depth === 100);
 assert.ok(outlierPt, 'Outlier point at 100m must exist in pointCoords for tooltip inspectability');
 assert.equal(outlierPt.isGood, false);
+assert.equal(outlierPt.isBad, true);
+assert.equal(outlierPt.isUnknown, false);
 assert.equal(outlierPt.qcFlag, 4);
-console.log('✓ 5. QC outlier handling and discontinuous SVG path gaps verified');
+assert.equal(outlierPt.qcStatus, 'bad');
+
+// 5b. Absent / Missing QC Flags (e.g., Bundled Reference Buoys)
+const absentQC = cleanProfileData(testDepths, testValues, null);
+assert.equal(absentQC.hasGaps, false, 'Absent QC must not fabricate gaps by default');
+assert.equal(absentQC.goodCount, 0, 'Absent QC must not count points as good');
+assert.equal(absentQC.badCount, 0, 'Absent QC must not count points as bad');
+assert.equal(absentQC.unknownCount, 5, 'All 5 points must be classified as unknown QC');
+
+absentQC.points.forEach((pt) => {
+  assert.equal(pt.isGood, false, 'Absent QC point must NOT have isGood=true');
+  assert.equal(pt.isBad, false, 'Absent QC point must NOT have isBad=true');
+  assert.equal(pt.isUnknown, true, 'Absent QC point must have isUnknown=true');
+  assert.equal(pt.qcStatus, 'unknown', 'Absent QC point must have qcStatus="unknown"');
+  assert.equal(pt.qcFlag, null);
+});
+
+const { pathSegments: absentSegments, pointCoords: absentCoords } = generateProfileSvgPaths(
+  absentQC.points,
+  scales.valueToX,
+  scales.depthToY
+);
+assert.equal(absentSegments.length, 1, 'Measurements with absent QC must render a continuous curve without gap');
+assert.equal(absentCoords.length, 5);
+absentCoords.forEach((pt) => {
+  assert.equal(pt.isUnknown, true);
+});
+
+// 5c. Mixed QC with Good, Bad, and Unknown Points
+const mixedQC = cleanProfileData([0, 50, 100, 200, 500], [28, 26, 99, 18, 12], [1, 2, 4, null, 1]);
+assert.equal(mixedQC.goodCount, 3); // 0m (flag 1), 50m (flag 2), 500m (flag 1)
+assert.equal(mixedQC.badCount, 1);  // 100m (flag 4)
+assert.equal(mixedQC.unknownCount, 1); // 200m (null)
+assert.equal(mixedQC.hasGaps, true); // has bad point
+
+console.log('✓ 5. QC three-state handling (good, bad outlier, and absent/unknown) verified');
 
 // -----------------------------------------------------------------------------
 // 6. Axis Ticks Formatting

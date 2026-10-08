@@ -792,6 +792,19 @@ export default function ProfileModal({
       >
         {hoveredPoint ? (() => {
           const matchedModel = showModelOverlay && currentModelLevels.find(m => Math.abs(m.depth - hoveredPoint.depth) < 1.0);
+          const isUnknownQC = hoveredPoint.qcStatus === 'unknown' || hoveredPoint.isUnknown || hoveredPoint.qcFlag === null || hoveredPoint.qcFlag === undefined;
+          const isGoodQC = !isUnknownQC && hoveredPoint.isGood;
+          const qcLabel = isUnknownQC
+            ? 'Not reported'
+            : isGoodQC
+              ? `Good (Flag ${hoveredPoint.qcFlag})`
+              : `Bad (Flag ${hoveredPoint.qcFlag})`;
+          const qcColor = isUnknownQC
+            ? 'var(--muted)'
+            : isGoodQC
+              ? 'var(--accent)'
+              : '#f43f5e';
+
           return (
             <span>
               Depth: <strong style={{ color: 'var(--text)' }}>{hoveredPoint.depth}m</strong> · Obs:{' '}
@@ -807,8 +820,8 @@ export default function ProfileModal({
                 </>
               ) : null}
               {' '}· QC:{' '}
-              <span style={{ color: hoveredPoint.isGood ? 'var(--accent)' : '#f43f5e', fontWeight: 600 }}>
-                {hoveredPoint.isGood ? `Good (Flag ${hoveredPoint.qcFlag})` : `Bad (Flag ${hoveredPoint.qcFlag})`}
+              <span style={{ color: qcColor, fontWeight: 600 }} data-testid="tooltip-qc-status">
+                {qcLabel}
               </span>
             </span>
           );
@@ -1131,8 +1144,9 @@ function VerticalDepthSvgChart({
 
       {/* Observation Points */}
       {pointCoords.map((pt, i) => {
-        const isBad = !pt.isGood;
-        const ptColor = isBad ? '#f43f5e' : color;
+        const isBad = pt.isBad;
+        const isUnknown = pt.isUnknown;
+        const ptColor = isBad ? '#f43f5e' : (isUnknown ? '#94a3b8' : color);
         const isHovered = hoveredPoint && hoveredPoint.depth === pt.depth;
 
         return (
@@ -1147,7 +1161,7 @@ function VerticalDepthSvgChart({
               style={{ cursor: 'pointer' }}
               onMouseEnter={() => onHoverPoint?.({ ...pt, unit, color: ptColor })}
               onMouseLeave={() => onHoverPoint?.(null)}
-              data-testid={isBad ? 'qc-outlier-point' : 'profile-point'}
+              data-testid={isBad ? 'qc-outlier-point' : (isUnknown ? 'qc-unknown-point' : 'profile-point')}
             />
             {isBad && (
               <text
@@ -1200,14 +1214,28 @@ function TSDiagramSvgChart({
       const d = depths[i];
       const t = temperatures[i];
       const s = salinities[i];
-      const qc = Array.isArray(qcFlags) ? (qcFlags[i] ?? 1) : null;
+      let qc = null;
+      if (Array.isArray(qcFlags)) {
+        qc = qcFlags[i] !== undefined ? qcFlags[i] : null;
+      } else if (qcFlags !== null && qcFlags !== undefined) {
+        qc = qcFlags;
+      }
+
       if (d != null && t != null && s != null && !isNaN(d) && !isNaN(t) && !isNaN(s)) {
+        const isGood = qc === 1 || qc === 2;
+        const isBad = qc === 3 || qc === 4;
+        const isUnknown = !isGood && !isBad;
+        const qcStatus = isGood ? 'good' : (isBad ? 'bad' : 'unknown');
+
         pts.push({
           depth: d,
           temperature: t,
           salinity: s,
           qcFlag: qc,
-          isGood: qc === 1 || qc === 2 || qc === null,
+          qcStatus,
+          isGood,
+          isBad,
+          isUnknown,
           density: computePotentialDensity(s, t)
         });
       }
@@ -1253,9 +1281,9 @@ function TSDiagramSvgChart({
   const salTicks = useMemo(() => generateAxisTicks(salBounds[0], salBounds[1], 5), [salBounds]);
   const tempTicks = useMemo(() => generateAxisTicks(tempBounds[0], tempBounds[1], 5), [tempBounds]);
 
-  // Connect T-S points into trajectory
+  // Connect T-S points into trajectory (include good and unknown, break on bad outliers)
   const tsPathD = useMemo(() => {
-    const valid = points.filter((p) => p.isGood);
+    const valid = points.filter((p) => !p.isBad);
     if (valid.length < 2) return '';
     const toX = (s) => padding.left + Math.max(0, Math.min(1, (s - salBounds[0]) / (salBounds[1] - salBounds[0]))) * (chartWidth - padding.left - padding.right);
     const toY = (t) => chartHeight - padding.bottom - Math.max(0, Math.min(1, (t - tempBounds[0]) / (tempBounds[1] - tempBounds[0]))) * (chartHeight - padding.top - padding.bottom);
@@ -1401,12 +1429,17 @@ function TSDiagramSvgChart({
         />
       )}
 
-      {/* Observation Points colored by depth */}
+      {/* Observation Points colored by depth or neutral for unknown */}
       {points.map((pt, i) => {
         const x = salToX(pt.salinity);
         const y = tempToY(pt.temperature);
-        const isBad = !pt.isGood;
-        const color = isBad ? '#f43f5e' : pt.depth <= 100 ? '#f59e0b' : pt.depth <= 500 ? '#38bdf8' : '#818cf8';
+        const isBad = pt.isBad;
+        const isUnknown = pt.isUnknown;
+        const color = isBad
+          ? '#f43f5e'
+          : isUnknown
+            ? '#94a3b8'
+            : (pt.depth <= 100 ? '#f59e0b' : pt.depth <= 500 ? '#38bdf8' : '#818cf8');
 
         return (
           <circle
@@ -1424,12 +1457,15 @@ function TSDiagramSvgChart({
                 value: `${pt.temperature}°C / ${pt.salinity} PSU (σθ=${pt.density.toFixed(2)} kg/m³)`,
                 unit: '',
                 isGood: pt.isGood,
+                isUnknown: pt.isUnknown,
+                isBad: pt.isBad,
+                qcStatus: pt.qcStatus,
                 qcFlag: pt.qcFlag,
                 color
               })
             }
             onMouseLeave={() => onHoverPoint?.(null)}
-            data-testid="ts-data-point"
+            data-testid={isBad ? 'ts-qc-outlier-point' : (isUnknown ? 'ts-qc-unknown-point' : 'ts-data-point')}
           />
         );
       })}

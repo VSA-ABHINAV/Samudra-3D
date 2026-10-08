@@ -121,23 +121,32 @@ export function cleanProfileData(depths = [], values = [], qcFlags = []) {
       maxDepth: 100,
       hasGaps: false,
       goodCount: 0,
-      badCount: 0
+      badCount: 0,
+      unknownCount: 0
     };
   }
 
   const raw = [];
-  const flags = Array.isArray(qcFlags) ? qcFlags : [];
+  const flags = Array.isArray(qcFlags) ? qcFlags : null;
   const n = Math.min(depths.length, values.length);
   for (let i = 0; i < n; i++) {
     const d = depths[i];
     const v = values[i];
-    const qc = flags[i] !== undefined ? flags[i] : (qcFlags === null ? null : 1);
+    const qc = flags ? (flags[i] !== undefined ? flags[i] : null) : (qcFlags === null || qcFlags === undefined ? null : qcFlags);
     if (d !== null && d !== undefined && !isNaN(d) && v !== null && v !== undefined && !isNaN(v)) {
+      const isGood = qc === 1 || qc === 2;
+      const isBad = qc === 3 || qc === 4;
+      const isUnknown = !isGood && !isBad;
+      const qcStatus = isGood ? 'good' : (isBad ? 'bad' : 'unknown');
+
       raw.push({
         depth: Number(d),
         value: Number(v),
         qcFlag: qc,
-        isGood: qc === 1 || qc === 2 || qc === null,
+        qcStatus,
+        isGood,
+        isBad,
+        isUnknown,
         originalIndex: i
       });
     }
@@ -158,7 +167,8 @@ export function cleanProfileData(depths = [], values = [], qcFlags = []) {
   }
 
   const goodCount = points.filter((p) => p.isGood).length;
-  const badCount = points.filter((p) => !p.isGood).length;
+  const badCount = points.filter((p) => p.isBad).length;
+  const unknownCount = points.filter((p) => p.isUnknown).length;
   const hasGaps = badCount > 0;
 
   let minVal = points.length ? Math.min(...points.map((p) => p.value)) : 0;
@@ -182,7 +192,8 @@ export function cleanProfileData(depths = [], values = [], qcFlags = []) {
     maxDepth: Math.max(100, maxDepth),
     hasGaps,
     goodCount,
-    badCount
+    badCount,
+    unknownCount
   };
 }
 
@@ -258,7 +269,7 @@ export function generateProfileSvgPaths(points, valueToX, depthToY) {
       y
     });
 
-    if (pt.isGood) {
+    if (!pt.isBad) {
       currentSegment.push({ x, y });
     } else {
       // Bad QC flag triggers a path gap
