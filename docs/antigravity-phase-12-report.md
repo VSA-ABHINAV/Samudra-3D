@@ -7,7 +7,7 @@
 - **Phase 12 Report Trail Commit**: `dc62d4ebfbe746ff57da2a6c8e31fc5772ec139e` (`docs(phase-12): update Phase 12 completion report`)
 - **Phase 12 Corrections 01 Commit**: `00b7d9980d216f40445d4719c878939b5fa2fbf8` (`fix(phase-12): qualify provenance copy, wire workflow card reachability, and reconcile functional map`)
 - **Phase 12 Corrections 02 Commit**: `b177f6ecad9d92419ba8ba4ba3779e56e01a8b98` (`fix(phase-12): reset workflow overlays, qualify runtime badge, and remove SOFAR overclaim`)
-- **Phase 12 Corrections 03 Commit**: *[Recorded upon commit]* (`fix(phase-12): exercise SPA in-app transitions and label synthetic ROMS as test data`)
+- **Phase 12 Corrections 03 Commit**: `8368a86441a4568e6de84062f1237fdb7716f384` (`fix(phase-12): exercise SPA in-app transitions and label synthetic ROMS as test data`)
 
 ---
 
