@@ -1,5 +1,4 @@
 import React from 'react';
-import { getDatasetProvenance } from '../utils/scientificPresentation.js';
 
 /**
  * HomePage - Public Institutional Portal for SAMUDRA-3D
@@ -19,13 +18,12 @@ import { getDatasetProvenance } from '../utils/scientificPresentation.js';
  */
 export default function HomePage({
   currentUser = null,
-  activeDataset = null,
+  activeDataset: _activeDataset = null,
   onNavigate = null,
   onOpenSources = null,
   theme = 'dark',
   onToggleTheme = null
 }) {
-  const provenance = getDatasetProvenance({ activeDataset });
   const isAuthenticated = Boolean(currentUser);
 
   const handleLaunchApp = () => {
@@ -33,6 +31,15 @@ export default function HomePage({
       onNavigate('/app');
     } else if (typeof window !== 'undefined') {
       window.location.pathname = '/app';
+    }
+  };
+
+  const handleLaunchWorkflow = (workflowKey) => {
+    const target = `/app?workflow=${encodeURIComponent(workflowKey)}`;
+    if (onNavigate) {
+      onNavigate(target);
+    } else if (typeof window !== 'undefined') {
+      window.location.href = target;
     }
   };
 
@@ -170,7 +177,7 @@ export default function HomePage({
         <div className="max-w-5xl mx-auto text-center space-y-6">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-mono font-semibold bg-sky-950/80 border border-sky-600/40 text-sky-300">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" aria-hidden="true" />
-            <span>Active Numerical Model: {provenance.provider} ({provenance.sourceModeLabel})</span>
+            <span>Configured Catalog: Copernicus GLORYS12V1 | Runtime: Local Synthetic/Archive</span>
           </div>
 
           <h1 className="text-3xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-white leading-tight">
@@ -238,8 +245,9 @@ export default function HomePage({
               <span>Globe & Block View Modes</span>
               <button
                 type="button"
-                onClick={handleLaunchApp}
-                className="hover:underline flex items-center gap-1"
+                onClick={() => handleLaunchWorkflow('explore')}
+                data-testid="workflow-btn-explore"
+                className="hover:underline flex items-center gap-1 font-semibold"
               >
                 Open Explorer →
               </button>
@@ -268,8 +276,9 @@ export default function HomePage({
               <span>Argo, Gliders & Buoys</span>
               <button
                 type="button"
-                onClick={handleLaunchApp}
-                className="hover:underline flex items-center gap-1"
+                onClick={() => handleLaunchWorkflow('observations')}
+                data-testid="workflow-btn-observations"
+                className="hover:underline flex items-center gap-1 font-semibold"
               >
                 View Fleet →
               </button>
@@ -298,8 +307,9 @@ export default function HomePage({
               <span>Trilinear Collocation Engine</span>
               <button
                 type="button"
-                onClick={handleLaunchApp}
-                className="hover:underline flex items-center gap-1"
+                onClick={() => handleLaunchWorkflow('analysis')}
+                data-testid="workflow-btn-analysis"
+                className="hover:underline flex items-center gap-1 font-semibold"
               >
                 Run Comparison →
               </button>
@@ -328,8 +338,9 @@ export default function HomePage({
               <span>EOS-80 & Mackenzie Formula</span>
               <button
                 type="button"
-                onClick={handleLaunchApp}
-                className="hover:underline flex items-center gap-1"
+                onClick={() => handleLaunchWorkflow('physics')}
+                data-testid="workflow-btn-physics"
+                className="hover:underline flex items-center gap-1 font-semibold"
               >
                 Inspect Physics →
               </button>
@@ -358,8 +369,9 @@ export default function HomePage({
               <span>CF-1.8 Subsetting & Manifests</span>
               <button
                 type="button"
-                onClick={handleLaunchApp}
-                className="hover:underline flex items-center gap-1"
+                onClick={() => handleLaunchWorkflow('data')}
+                data-testid="workflow-btn-data"
+                className="hover:underline flex items-center gap-1 font-semibold"
               >
                 Open Manager →
               </button>
@@ -388,8 +400,9 @@ export default function HomePage({
               <span>Thermal Fronts & Ask SAMUDRA</span>
               <button
                 type="button"
-                onClick={handleLaunchApp}
-                className="hover:underline flex items-center gap-1"
+                onClick={() => handleLaunchWorkflow('operations')}
+                data-testid="workflow-btn-operations"
+                className="hover:underline flex items-center gap-1 font-semibold"
               >
                 Open Operations →
               </button>
@@ -413,7 +426,7 @@ export default function HomePage({
             <span>Data Provenance & Scientific Truthfulness Declaration</span>
           </div>
           <p className="leading-relaxed">
-            SAMUDRA-3D operates on validated historical Copernicus Marine GLORYS12V1 reanalysis (0–25°N, 50–100°E, Jan 1–7, 2025, ~8.3 km resolution) and Synthetic ROMS model domains. Queries subset existing precomputed NetCDF arrays and do not generate live forecasts or simulate new numerical models on the fly.
+            SAMUDRA-3D includes preconfigured CF-1.8 NetCDF4 catalog specifications for Copernicus GLORYS12V1 reanalysis (0–25°N, 50–100°E) alongside verified local synthetic ROMS arrays. Subsetting queries select precomputed numerical arrays and do not generate live forecasts or execute live external ingestion (Offline Integration Gap).
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 text-[11px] font-mono text-slate-400">
             <div className="flex items-center gap-2">

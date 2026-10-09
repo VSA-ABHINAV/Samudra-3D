@@ -121,4 +121,79 @@ test.describe('Public Homepage & Unified Navigation Suite', () => {
     await expect(page).toHaveURL(/.*\/app/);
     await expect(page.locator('#workspace')).toBeVisible();
   });
+
+  test('clicking Explore workflow card opens workstation in 3D exploration mode', async ({ page }) => {
+    await page.goto('/home');
+    const exploreBtn = page.locator('[data-testid="workflow-btn-explore"]');
+    await expect(exploreBtn).toBeVisible();
+    await exploreBtn.click();
+
+    await expect(page).toHaveURL(/.*\/app\?workflow=explore/);
+    await expect(page.locator('#workspace')).toBeVisible({ timeout: 8000 });
+  });
+
+  test('clicking Observations workflow card opens workstation and observation fleet drawer', async ({ page }) => {
+    await page.goto('/home');
+    const observationsBtn = page.locator('[data-testid="workflow-btn-observations"]');
+    await expect(observationsBtn).toBeVisible();
+    await observationsBtn.click();
+
+    await expect(page).toHaveURL(/.*\/app\?workflow=observations/);
+    await expect(page.locator('#workspace')).toBeVisible({ timeout: 8000 });
+    const drawer = page.locator('[data-testid="observation-drawer"]');
+    await expect(drawer).toBeVisible({ timeout: 8000 });
+    await expect(drawer).toContainText('OBSERVATION FLEET');
+  });
+
+  test('clicking Analysis workflow card opens workstation and model comparison suite modal', async ({ page }) => {
+    await page.goto('/home');
+    const analysisBtn = page.locator('[data-testid="workflow-btn-analysis"]');
+    await expect(analysisBtn).toBeVisible();
+    await analysisBtn.click();
+
+    await expect(page).toHaveURL(/.*\/app\?workflow=analysis/);
+    await expect(page.locator('#workspace')).toBeVisible({ timeout: 8000 });
+    const modal = page.locator('[data-testid="model-comparison-modal"]');
+    await expect(modal).toBeVisible({ timeout: 8000 });
+    await expect(modal).toContainText('Model Prediction vs In-Situ Observation Comparison');
+  });
+
+  test('clicking Physics workflow card opens workstation and deep ocean physics modal', async ({ page }) => {
+    await page.goto('/home');
+    const physicsBtn = page.locator('[data-testid="workflow-btn-physics"]');
+    await expect(physicsBtn).toBeVisible();
+    await physicsBtn.click();
+
+    await expect(page).toHaveURL(/.*\/app\?workflow=physics/);
+    await expect(page.locator('#workspace')).toBeVisible({ timeout: 8000 });
+    const modal = page.locator('[data-testid="in-depth-ocean-modal"]');
+    await expect(modal).toBeVisible({ timeout: 8000 });
+    await expect(modal).toContainText('In-Depth Ocean Physics');
+  });
+
+  test('clicking Data workflow card opens workstation and dataset manager modal', async ({ page }) => {
+    await page.goto('/home');
+    const dataBtn = page.locator('[data-testid="workflow-btn-data"]');
+    await expect(dataBtn).toBeVisible();
+    await dataBtn.click();
+
+    await expect(page).toHaveURL(/.*\/app\?workflow=data/);
+    await expect(page.locator('#workspace')).toBeVisible({ timeout: 8000 });
+    const modal = page.locator('[data-testid="dataset-manager-modal"]');
+    await expect(modal).toBeVisible({ timeout: 8000 });
+    await expect(modal).toContainText('Dataset Management & Provenance Architecture');
+  });
+
+  test('clicking Operations workflow card opens workstation and fisherman operations modal', async ({ page }) => {
+    await page.goto('/home');
+    const operationsBtn = page.locator('[data-testid="workflow-btn-operations"]');
+    await expect(operationsBtn).toBeVisible();
+    await operationsBtn.click();
+
+    await expect(page).toHaveURL(/.*\/app\?workflow=operations/);
+    await expect(page.locator('#workspace')).toBeVisible({ timeout: 8000 });
+    const modal = page.locator('[data-testid="fisherman-mode-modal"]');
+    await expect(modal).toBeVisible({ timeout: 8000 });
+    await expect(modal).toContainText('Fisherman Operational Intelligence');
+  });
 });

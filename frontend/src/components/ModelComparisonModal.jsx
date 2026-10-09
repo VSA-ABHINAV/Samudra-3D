@@ -158,6 +158,13 @@ export default function ModelComparisonModal({
     return list;
   }, [argoFloats, gliderTransects, comparisonContext, selectedFloat]);
 
+  // Synchronize selectedPlatformId when platformList becomes available
+  useEffect(() => {
+    if (!selectedPlatformId && platformList && platformList.length > 0) {
+      setSelectedPlatformId(platformList[0].id);
+    }
+  }, [platformList, selectedPlatformId]);
+
   // Execute collocation prediction job with race protection
   const runPredictionJob = useCallback(async (platformId = selectedPlatformId, strat = timeStrategy) => {
     if (!platformId) return;
@@ -408,11 +415,8 @@ export default function ModelComparisonModal({
 
   if (!isOpen) return null;
 
-  // No-platform unavailable state: comparison was triggered from probe with no nearest observation
-  // or no platforms are available to compare.
-  const isNoPlatformUnavailable =
-    (comparisonContext && comparisonContext.isAvailable === false) ||
-    (!selectedFloat && (!platformList || platformList.length === 0));
+  // No-platform unavailable state: comparison was explicitly triggered from probe with no nearest observation
+  const isNoPlatformUnavailable = Boolean(comparisonContext && comparisonContext.isAvailable === false);
 
   if (isNoPlatformUnavailable) {
     return (
@@ -421,12 +425,13 @@ export default function ModelComparisonModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="no-platform-title"
-        data-testid="model-comparison-no-platform"
+        data-testid="model-comparison-modal"
         onClick={(e) => { if (e.target === e.currentTarget) onClose?.(); }}
       >
         <div
           className="rounded-2xl border shadow-2xl p-8 max-w-md w-full text-center"
           style={{ backgroundColor: 'var(--panel)', borderColor: 'var(--border)', color: 'var(--text)' }}
+          data-testid="model-comparison-no-platform"
         >
           <span className="text-4xl block mb-4" aria-hidden="true">🚫</span>
           <h2 id="no-platform-title" className="text-base font-bold tracking-tight mb-2">

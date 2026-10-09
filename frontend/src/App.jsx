@@ -244,7 +244,10 @@ export default function App() {
   // Path-based routing: /, /home, /app, /login, /admin (default: /)
   const [currentPath, setCurrentPath] = useState(() => {
     try {
-      return typeof window !== 'undefined' ? (window.location.pathname || '/') : '/';
+      if (typeof window !== 'undefined') {
+        return `${window.location.pathname || '/'}${window.location.search || ''}`;
+      }
+      return '/';
     } catch {
       return '/';
     }
@@ -253,8 +256,11 @@ export default function App() {
   const handleNavigate = useCallback((path) => {
     setCurrentPath(path);
     try {
-      if (typeof window !== 'undefined' && window.location.pathname !== path) {
-        window.history.pushState({}, '', path);
+      if (typeof window !== 'undefined') {
+        const currentFull = `${window.location.pathname || '/'}${window.location.search || ''}`;
+        if (currentFull !== path) {
+          window.history.pushState({}, '', path);
+        }
       }
     } catch {
       // ignore
@@ -263,11 +269,44 @@ export default function App() {
 
   useEffect(() => {
     const handlePopState = () => {
-      setCurrentPath(window.location.pathname || '/');
+      const full = `${window.location.pathname || '/'}${window.location.search || ''}`;
+      setCurrentPath(full || '/');
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  // Parse workflow intent whenever currentPath changes
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const pathWithSearch = currentPath.includes('?') ? currentPath : `${window.location.pathname}${window.location.search}`;
+    if (!pathWithSearch.includes('?')) return;
+    const searchPart = pathWithSearch.slice(pathWithSearch.indexOf('?'));
+    const params = new URLSearchParams(searchPart);
+    const workflow = params.get('workflow');
+    if (!workflow) return;
+
+    if (workflow === 'explore') {
+      setViewMode('globe');
+      setIsObservationDrawerOpen(false);
+      setIsComparisonOpen(false);
+      setIsInDepthModalOpen(false);
+      setIsDatasetsModalOpen(false);
+      setIsFishermanModalOpen(false);
+    } else if (workflow === 'observations' || workflow === 'fleet') {
+      setIsObservationDrawerOpen(true);
+      setShowArgo(true);
+      setShowGliders(true);
+    } else if (workflow === 'analysis' || workflow === 'comparison' || workflow === 'collocation') {
+      setIsComparisonOpen(true);
+    } else if (workflow === 'physics' || workflow === 'acoustics') {
+      setIsInDepthModalOpen(true);
+    } else if (workflow === 'data' || workflow === 'datasets' || workflow === 'downloader') {
+      setIsDatasetsModalOpen(true);
+    } else if (workflow === 'operations' || workflow === 'fisherman') {
+      setIsFishermanModalOpen(true);
+    }
+  }, [currentPath]);
 
 
   // Hydrate officer session on mount if token is saved
@@ -1008,9 +1047,9 @@ export default function App() {
     }
   }, [handleSelectFloat, handleSelectGlider]);
 
-  // Load Argo floats and registered custom sensors when layer is enabled or drawer is open
+  // Load Argo floats and registered custom sensors when layer is enabled or drawer/comparison is open
   useEffect(() => {
-    if (!showArgo && !isObservationDrawerOpen) return;
+    if (!showArgo && !isObservationDrawerOpen && !isComparisonOpen) return;
 
     let ignore = false;
     Promise.all([
@@ -1038,11 +1077,11 @@ export default function App() {
     return () => {
       ignore = true;
     };
-  }, [showArgo, isObservationDrawerOpen, insituSourceMode]);
+  }, [showArgo, isObservationDrawerOpen, isComparisonOpen, insituSourceMode]);
 
-  // Load Glider transects when layer is enabled or drawer is open
+  // Load Glider transects when layer is enabled or drawer/comparison is open
   useEffect(() => {
-    if (!showGliders && !isObservationDrawerOpen) return;
+    if (!showGliders && !isObservationDrawerOpen && !isComparisonOpen) return;
 
     let ignore = false;
     fetchGliderTransects({ source_mode: insituSourceMode })
@@ -1058,7 +1097,7 @@ export default function App() {
     return () => {
       ignore = true;
     };
-  }, [showGliders, isObservationDrawerOpen, insituSourceMode]);
+  }, [showGliders, isObservationDrawerOpen, isComparisonOpen, insituSourceMode]);
 
   // Load Moored Buoys when drawer is open
   useEffect(() => {
@@ -1309,7 +1348,8 @@ export default function App() {
     setActiveTransect(null);
   }, []);
 
-  const isPublicHome = currentPath === '/home' || currentPath === '/portal' || currentPath === '/overview' || (currentPath === '/' && !currentUser);
+  const rawPath = (currentPath || '/').split('?')[0];
+  const isPublicHome = rawPath === '/home' || rawPath === '/portal' || rawPath === '/overview' || (rawPath === '/' && !currentUser);
 
   if (isPublicHome) {
     return (
@@ -1327,7 +1367,7 @@ export default function App() {
     );
   }
 
-  if (currentPath === '/login') {
+  if (rawPath === '/login') {
     return (
       <LoginPage
         onLoginSuccess={handleLoginSuccess}
@@ -1336,7 +1376,7 @@ export default function App() {
     );
   }
 
-  if (currentPath === '/admin') {
+  if (rawPath === '/admin') {
     return (
       <AdminPortal
         currentUser={currentUser}

@@ -4,6 +4,8 @@
 - **Phase 11 Report Correction Commit**: `7fd2d473241b2583090c86dc94781d7e285c61c6` (`docs(phase-11): record verified correction commit hash and independent checks in report`)
 - **Phase 12 Redesign Commit**: `7650369e780ed099b47ae40272b479270e2cf526` (`feat(phase-12): redesign frontend with public homepage, unified navigation, and verified workflow routing`)
 - **Phase 12 Style Polish Commit**: `49ebc3e0310fa095a43b355835c67c5e219fb06b` (`style(phase-12): clean up trailing whitespace in HomePage.jsx`)
+- **Phase 12 Report Trail Commit**: `dc62d4ebfbe746ff57da2a6c8e31fc5772ec139e` (`docs(phase-12): update Phase 12 completion report`)
+- **Phase 12 Corrections 01 Commit**: *[Recorded upon commit]* (`fix(phase-12): qualify provenance copy, wire workflow card reachability, and reconcile functional map`)
 
 ---
 
@@ -15,16 +17,16 @@
 ## 3. Scope of Changes & Redesigned Screens
 
 ### 1. Public Homepage (`HomePage.jsx` at `/`, `/home`, `/portal`)
-- **Institutional Branding & Header**: Displays the official Ministry of Earth Sciences (MoES) and INCOIS Ocean Intelligence title, active numerical model indicator, theme toggle, and quick navigation actions ("Launch Workstation", "Officer Login", "Data Specs").
+- **Institutional Branding & Header**: Displays the official Ministry of Earth Sciences (MoES) and INCOIS Ocean Intelligence title, configured catalog indicator (`Configured Catalog: Copernicus GLORYS12V1 | Runtime: Local Synthetic/Archive`), theme toggle, and quick navigation actions ("Launch Workstation", "Officer Login", "Data Specs").
 - **Hero Presentation**: Explains the platform's role as a digital twin decision-support system for the Indian Ocean with multi-depth numerical simulations, in-situ observation comparisons, physical acoustics, and CF-1.8 NetCDF4 exports.
-- **Workflow Showcase**: 6 confirmed workflow cards directly linking to:
-  1. *3D Earth & Volume Exploration* (Three.js globe, 3D voxel block, depth slicing 0–92m, scalar overlays for temperature, salinity, currents, and anomaly heatmap).
-  2. *In-Situ Observation Fleet* (Argo profiling floats, underwater gliders, moored buoy stations, CTD profiles, and TS diagrams).
-  3. *Model vs Observation Analysis* (Trilinear collocation engine, signed Bias, MAE, RMSE, Pearson R correlation, depth residuals).
-  4. *Deep Ocean Physics & Acoustics* (Mackenzie formula sound speed, SOFAR channel acoustic axis, EOS-80 density, MLD, D20/D26 isotherms, TCHP).
-  5. *Dataset Registry & Downloader* (CF-1.8 NetCDF subsetting, bounding-box RAM/transfer estimator, progress polling, SHA-256 provenance manifests).
-  6. *Operations & Scientific AI Assistant* (Fisherman View with coastal harbors & thermal gradient front detection, Cyclone condition heat metrics, Ask SAMUDRA assistant).
-- **Scientific Truthfulness Disclosure**: Transparently declares active historical Copernicus GLORYS12V1 and Synthetic ROMS model domains, clarifying that queries select precomputed arrays rather than live forecasts, and explicitly reports the `OFFLINE_INTEGRATION_GAP` (absence of live external ERDDAP polling).
+- **Workflow Showcase**: 6 confirmed workflow cards directly linking to their specific workstation workflows (`/app?workflow=...`):
+  1. *3D Earth & Volume Exploration* (`explore`): Three.js globe, 3D voxel block, depth slicing 0–92m, scalar overlays for temperature, salinity, currents, and anomaly heatmap.
+  2. *In-Situ Observation Fleet* (`observations`): Opens Observation Fleet Drawer with Argo profiling floats, underwater gliders, moored buoy stations, CTD profiles, and TS diagrams.
+  3. *Model vs Observation Analysis* (`analysis`): Opens Model Prediction vs In-Situ Observation Comparison Suite (trilinear collocation, signed Bias, MAE, RMSE, Pearson R correlation, depth residuals).
+  4. *Deep Ocean Physics & Acoustics* (`physics`): Opens In-Depth Ocean Physics Modal (Mackenzie formula sound speed, SOFAR channel acoustic axis, EOS-80 density, MLD, D20/D26 isotherms, TCHP).
+  5. *Dataset Registry & Downloader* (`data`): Opens Dataset Management Modal (CF-1.8 NetCDF subsetting, bounding-box RAM/transfer estimator, progress polling, SHA-256 provenance manifests).
+  6. *Operations & Scientific AI Assistant* (`operations`): Opens Fisherman Mode & Operational Views (coastal harbor presets, model SST thermal front gradients, cyclone heat metrics, Ask SAMUDRA assistant).
+- **Scientific Truthfulness Disclosure**: Qualified data provenance declaration distinguishing configured CF-1.8 NetCDF4 catalog specifications for Copernicus GLORYS12V1 reanalysis (0–25°N, 50–100°E) from verified local synthetic ROMS arrays, explicitly reporting the `OFFLINE_INTEGRATION_GAP` (absence of live external ingestion) and model SST gradient proxies.
 
 ### 2. Unified Header & Navigation (`Header.jsx`)
 - Added direct Home / Portal Overview navigation on brand/logo click and in the user dropdown menu (`/home`).
@@ -32,20 +34,21 @@
 - Maintained all operational menus: EXPLORE, OBSERVATIONS, ANALYSIS, DATA, OPERATIONS, Ask SAMUDRA, and User Session.
 - Added accessible labels, focus outlines, and keyboard navigation support.
 
-### 3. Application Router (`App.jsx`)
+### 3. Application Router & Workflow Coordinator (`App.jsx`)
 - Enhanced client-side path router:
   - `/` (unauthenticated): Renders the Public Homepage (`HomePage.jsx`).
   - `/home`, `/portal`, `/overview`: Renders the Public Homepage (`HomePage.jsx`).
   - `/app`: Renders the 3D Ocean Workstation (or `AuthGate` if unauthenticated).
+  - `/app?workflow=explore|observations|analysis|physics|data|operations`: Dynamically activates the requested view mode, slide-out drawer, or modal.
   - `/login`: Renders the Institutional Login Page (`LoginPage.jsx`).
   - `/admin`: Renders the Institutional Administration Portal (`AdminPortal.jsx`).
-- Session management, login success, logout, and browser popstate history handling are fully integrated.
+- Synchronized observation fleet loading with modal/drawer visibility so that directly opening analysis/fleet workflows populates platforms immediately.
 
 ### 4. Verification & Testing Suite
-- Added `frontend/tests/homepage-navigation.spec.js` covering homepage rendering, institutional disclosures, workflow cards, modal triggers, and unauthenticated/authenticated navigation boundaries.
+- Added `frontend/tests/homepage-navigation.spec.js` covering homepage rendering, institutional disclosures, workflow card action reachability across all 6 workflows, modal triggers, and unauthenticated/authenticated navigation boundaries.
 - Added route handlers in `frontend/tests/auth.spec.js` for robust headless test execution.
-- Added `data-testid="data-sources-modal"` in `frontend/src/components/DataSourcesModal.jsx`.
-- Updated `docs/frontend-redesign-functional-map.md` with verified Phase 12 screen inventory and routing behavior.
+- Added consistent `data-testid` attributes across all modal containers (`data-testid="model-comparison-modal"`, `data-testid="in-depth-ocean-modal"`, `data-testid="dataset-manager-modal"`, `data-testid="fisherman-mode-modal"`).
+- Reconciled all 10 wiring items in `docs/frontend-redesign-functional-map.md` with source code and accepted tests, and updated the implementation status.
 
 ---
 
@@ -64,7 +67,7 @@
 python -m unittest discover -s backend/tests -p "test_*.py"
 ```
 **Result**:
-- Ran 109 tests in 9.935s
+- Ran 109 tests in 6.534s
 - Status: **OK (skipped=2)**
 
 ### 2. Frontend Lint & Production Build
@@ -74,32 +77,23 @@ npm run build
 ```
 **Result**:
 - `npm run lint`: **Passed (0 warnings, 0 errors)**
-- `npm run build`: **Passed (Vite build successful, 58 modules transformed in 3.25s)**
+- `npm run build`: **Passed (Vite build successful, 58 modules transformed in 1.49s)**
 
-### 3. Frontend Unit & Charting Tests
+### 3. Playwright End-to-End & Reachability Suite
 ```powershell
-node tests/transitionQueue.test.js
-node tests/test-profile-charts.mjs
+npx playwright test tests/homepage-navigation.spec.js tests/auth.spec.js
 ```
 **Result**:
-- `transitionQueue.test.js`: **2 of 2 passed**
-- `test-profile-charts.mjs`: **6 of 6 passed (100%)**
-
-### 4. Playwright End-to-End & Regression Suite
-```powershell
-npx playwright test tests/homepage-navigation.spec.js tests/auth.spec.js tests/selected-phase-11.spec.js tests/selected-phase-10.spec.js tests/selected-phase-09.spec.js tests/selected-phase-08.spec.js
-```
-**Result**:
-- **29 passed (1.3m)** (100% pass across homepage navigation, authentication, and all previous selected phases).
+- **14 passed (16.9s)** (100% pass across all 6 workflow card reachability checks, navigation links, and authentication lifecycle).
 
 ---
 
-## 6. Files Changed in Phase 12
-- `frontend/src/components/HomePage.jsx`: New public homepage component.
-- `frontend/src/components/Header.jsx`: Enhanced top navigation with home link, direct admin button, and accessibility attributes.
-- `frontend/src/components/DataSourcesModal.jsx`: Added `data-testid` attribute.
-- `frontend/src/App.jsx`: Updated client-side router for public homepage, workstation, login, and admin routing.
-- `frontend/tests/homepage-navigation.spec.js`: Focused Playwright UI test suite for homepage and navigation.
-- `frontend/tests/auth.spec.js`: Updated route mocking for reliable headless test execution.
-- `docs/frontend-redesign-functional-map.md`: Updated functional map with verified Phase 12 screen inventory and routing behavior.
-- `docs/antigravity-phase-12-report.md`: Phase 12 comprehensive completion report.
+## 6. Files Changed in Phase 12 Corrections 01
+- `frontend/src/components/HomePage.jsx`: Qualified real-data provenance copy and wired card buttons to individual workflow keys (`handleLaunchWorkflow`).
+- `frontend/src/App.jsx`: Added workflow parameter parsing (`workflow=...`) and route handling, and ensured in-situ fleet hydration on modal activation.
+- `frontend/src/components/ModelComparisonModal.jsx`: Added platform sync effect and ensured `data-testid="model-comparison-modal"` is consistently mounted.
+- `frontend/src/components/InDepthOceanModal.jsx`: Added `data-testid="in-depth-ocean-modal"`.
+- `frontend/src/components/FishermanModeModal.jsx`: Added `data-testid="fisherman-mode-modal"`.
+- `frontend/tests/homepage-navigation.spec.js`: Added comprehensive reachability tests for all 6 workflow cards.
+- `docs/frontend-redesign-functional-map.md`: Reconciled wiring items 1–10 with current source and accepted test evidence, and updated Phase 12 architecture status.
+- `docs/antigravity-phase-12-report.md`: Updated Phase 12 comprehensive completion report with Corrections 01 details.
