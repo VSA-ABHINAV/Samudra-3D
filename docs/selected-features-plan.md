@@ -12,10 +12,11 @@ User decision: 28 September 2026. Implement all eight items from Codex's reviewe
 | Observation-ID search | 3/5 | Search an Argo identifier and select/focus its actual platform | Accepted after Codex Phase 08 review |
 | Download progress/cancellation | 3/5 | Track dataset downloads through completion/failure and cancel running jobs | Accepted after Codex Phase 09 review |
 | Buoy observations | 2/5 | Browse supported buoy measurements using an explicit list/detail contract | Accepted after Codex Phase 10 review |
-| Saved locations and analyses | Excluded | Bookmark/reopen locations or analysis sessions | Corrections completed in Phase 11 Correction 01; ready for Codex review |
-| Live external feeds | Excluded | Live cyclone tracks, fishing bulletins or telemetry feeds | Corrections completed in Phase 11 Correction 01; ready for Codex review |
+| Saved locations and analyses | Excluded | Bookmark/reopen locations or analysis sessions | Accepted after Codex Phase 11 review |
+| Live external feeds | Excluded | Live cyclone tracks, fishing bulletins or telemetry feeds | Accepted after Codex Phase 11 review |
+| Frontend redesign | 4/5 | Redesign UI with public homepage, unified navigation, and verified workflow routing | Accepted after Codex Phase 12 review |
 
-Existing synthetic data and glider profiles are not missing features to duplicate. Animated glider travel was not in the selected reviewed list and is not added by this decision. Lovable redesign remains after selected functionality is reviewed.
+Existing synthetic data and glider profiles are not missing features to duplicate. Animated glider travel was not in the selected reviewed list and is not added by this decision. Frontend redesign (Phase 12) is completed and accepted after Codex review.
 
 User-directed cleanup: remove implementation and backend connections/details dedicated to the two excluded features, and update the source feature inventory. Preserve local historical model/observation readers, dataset downloads, authentication, shared database models and scientific analysis computations. Do not delete stored rows or database tables in Phase 11.
 
