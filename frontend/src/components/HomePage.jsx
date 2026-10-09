@@ -177,7 +177,7 @@ export default function HomePage({
         <div className="max-w-5xl mx-auto text-center space-y-6">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-mono font-semibold bg-sky-950/80 border border-sky-600/40 text-sky-300">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" aria-hidden="true" />
-            <span>Configured Catalog: Copernicus GLORYS12V1 | Runtime: Local Synthetic/Archive</span>
+            <span>Catalog: Copernicus GLORYS12V1 (Unverified Locally) | Active Runtime: Verified Synthetic ROMS</span>
           </div>
 
           <h1 className="text-3xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-white leading-tight">
@@ -426,7 +426,7 @@ export default function HomePage({
             <span>Data Provenance & Scientific Truthfulness Declaration</span>
           </div>
           <p className="leading-relaxed">
-            SAMUDRA-3D includes preconfigured CF-1.8 NetCDF4 catalog specifications for Copernicus GLORYS12V1 reanalysis (0–25°N, 50–100°E) alongside verified local synthetic ROMS arrays. Subsetting queries select precomputed numerical arrays and do not generate live forecasts or execute live external ingestion (Offline Integration Gap).
+            SAMUDRA-3D includes preconfigured CF-1.8 NetCDF4 catalog specifications for Copernicus GLORYS12V1 reanalysis (0–25°N, 50–100°E; local file availability has not been verified in this environment) alongside verified local synthetic ROMS arrays. Subsetting queries select precomputed numerical arrays and do not generate live forecasts or execute live external ingestion (Offline Integration Gap).
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 text-[11px] font-mono text-slate-400">
             <div className="flex items-center gap-2">

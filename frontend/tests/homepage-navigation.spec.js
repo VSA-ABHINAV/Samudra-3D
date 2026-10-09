@@ -196,4 +196,47 @@ test.describe('Public Homepage & Unified Navigation Suite', () => {
     await expect(modal).toBeVisible({ timeout: 8000 });
     await expect(modal).toContainText('Fisherman Operational Intelligence');
   });
+
+  test('sequential workflow navigation from homepage resets prior modal state', async ({ page }) => {
+    // 1. Open Analysis workflow from homepage
+    await page.goto('/home');
+    const analysisBtn = page.locator('[data-testid="workflow-btn-analysis"]');
+    await expect(analysisBtn).toBeVisible();
+    await analysisBtn.click();
+
+    await expect(page).toHaveURL(/.*\/app\?workflow=analysis/);
+    const comparisonModal = page.locator('[data-testid="model-comparison-modal"]');
+    const physicsModal = page.locator('[data-testid="in-depth-ocean-modal"]');
+    await expect(comparisonModal).toBeVisible({ timeout: 8000 });
+    await expect(physicsModal).not.toBeVisible();
+
+    // 2. Return to home portal overview
+    await page.goto('/home');
+    await expect(page).toHaveURL(/.*\/home/);
+
+    // 3. Open Physics workflow from homepage
+    const physicsBtn = page.locator('[data-testid="workflow-btn-physics"]');
+    await expect(physicsBtn).toBeVisible();
+    await physicsBtn.click();
+
+    await expect(page).toHaveURL(/.*\/app\?workflow=physics/);
+    await expect(physicsModal).toBeVisible({ timeout: 8000 });
+    // Assert competing comparison modal has been reset and is NOT visible
+    await expect(comparisonModal).not.toBeVisible();
+  });
+
+  test('direct query parameter transition resets competing workflow overlay state', async ({ page }) => {
+    // 1. Enter observations workflow
+    await page.goto('/app?workflow=observations');
+    await expect(page.locator('#workspace')).toBeVisible({ timeout: 8000 });
+    const drawer = page.locator('[data-testid="observation-drawer"]');
+    const datasetModal = page.locator('[data-testid="dataset-manager-modal"]');
+    await expect(drawer).toBeVisible({ timeout: 8000 });
+    await expect(datasetModal).not.toBeVisible();
+
+    // 2. Transition directly to data management workflow
+    await page.goto('/app?workflow=data');
+    await expect(datasetModal).toBeVisible({ timeout: 8000 });
+    await expect(drawer).not.toBeVisible();
+  });
 });

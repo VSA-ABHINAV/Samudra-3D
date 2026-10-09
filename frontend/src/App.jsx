@@ -286,24 +286,39 @@ export default function App() {
     const workflow = params.get('workflow');
     if (!workflow) return;
 
-    if (workflow === 'explore') {
-      setViewMode('globe');
+    // Reset mutually exclusive workflow overlays before opening target
+    const resetOverlays = () => {
       setIsObservationDrawerOpen(false);
       setIsComparisonOpen(false);
       setIsInDepthModalOpen(false);
       setIsDatasetsModalOpen(false);
       setIsFishermanModalOpen(false);
+      setIsCycloneModalOpen(false);
+      setIsProfileModalOpen(false);
+      setIsCrossSectionModalOpen(false);
+      setIsAssistantOpen(false);
+      setIsSourcesOpen(false);
+    };
+
+    if (workflow === 'explore') {
+      resetOverlays();
+      setViewMode('globe');
     } else if (workflow === 'observations' || workflow === 'fleet') {
+      resetOverlays();
       setIsObservationDrawerOpen(true);
       setShowArgo(true);
       setShowGliders(true);
     } else if (workflow === 'analysis' || workflow === 'comparison' || workflow === 'collocation') {
+      resetOverlays();
       setIsComparisonOpen(true);
     } else if (workflow === 'physics' || workflow === 'acoustics') {
+      resetOverlays();
       setIsInDepthModalOpen(true);
     } else if (workflow === 'data' || workflow === 'datasets' || workflow === 'downloader') {
+      resetOverlays();
       setIsDatasetsModalOpen(true);
     } else if (workflow === 'operations' || workflow === 'fisherman') {
+      resetOverlays();
       setIsFishermanModalOpen(true);
     }
   }, [currentPath]);
