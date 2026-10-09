@@ -177,7 +177,7 @@ export default function HomePage({
         <div className="max-w-5xl mx-auto text-center space-y-6">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-mono font-semibold bg-sky-950/80 border border-sky-600/40 text-sky-300">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" aria-hidden="true" />
-            <span>Catalog: Copernicus GLORYS12V1 (Unverified Locally) | Active Runtime: Verified Synthetic ROMS</span>
+            <span>Configured Catalog: Copernicus GLORYS12V1 (Unverified Locally) | Verified Local Test Data: Synthetic ROMS</span>
           </div>
 
           <h1 className="text-3xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-white leading-tight">

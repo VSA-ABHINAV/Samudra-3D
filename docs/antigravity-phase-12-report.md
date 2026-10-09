@@ -7,6 +7,7 @@
 - **Phase 12 Report Trail Commit**: `dc62d4ebfbe746ff57da2a6c8e31fc5772ec139e` (`docs(phase-12): update Phase 12 completion report`)
 - **Phase 12 Corrections 01 Commit**: `00b7d9980d216f40445d4719c878939b5fa2fbf8` (`fix(phase-12): qualify provenance copy, wire workflow card reachability, and reconcile functional map`)
 - **Phase 12 Corrections 02 Commit**: `b177f6ecad9d92419ba8ba4ba3779e56e01a8b98` (`fix(phase-12): reset workflow overlays, qualify runtime badge, and remove SOFAR overclaim`)
+- **Phase 12 Corrections 03 Commit**: *[Recorded upon commit]* (`fix(phase-12): exercise SPA in-app transitions and label synthetic ROMS as test data`)
 
 ---
 
@@ -18,7 +19,7 @@
 ## 3. Scope of Changes & Redesigned Screens
 
 ### 1. Public Homepage (`HomePage.jsx` at `/`, `/home`, `/portal`)
-- **Institutional Branding & Header**: Displays the official Ministry of Earth Sciences (MoES) and INCOIS Ocean Intelligence title, qualified catalog indicator (`Catalog: Copernicus GLORYS12V1 (Unverified Locally) | Active Runtime: Verified Synthetic ROMS`), theme toggle, and quick navigation actions ("Launch Workstation", "Officer Login", "Data Specs").
+- **Institutional Branding & Header**: Displays the official Ministry of Earth Sciences (MoES) and INCOIS Ocean Intelligence title, qualified catalog indicator (`Configured Catalog: Copernicus GLORYS12V1 (Unverified Locally) | Verified Local Test Data: Synthetic ROMS`), theme toggle, and quick navigation actions ("Launch Workstation", "Officer Login", "Data Specs").
 - **Hero Presentation**: Explains the platform's role as a digital twin decision-support system for the Indian Ocean with multi-depth numerical simulations, in-situ observation comparisons, physical acoustics, and CF-1.8 NetCDF4 exports.
 - **Workflow Showcase**: 6 confirmed workflow cards directly linking to their specific workstation workflows (`/app?workflow=...`):
   1. *3D Earth & Volume Exploration* (`explore`): Three.js globe, 3D voxel block, depth slicing 0–92m, scalar overlays for temperature, salinity, currents, and anomaly heatmap.
@@ -46,7 +47,7 @@
 - Synchronized observation fleet loading with modal/drawer visibility so that directly opening analysis/fleet workflows populates platforms immediately.
 
 ### 4. Verification & Testing Suite
-- Added `frontend/tests/homepage-navigation.spec.js` covering homepage rendering, institutional disclosures, workflow card action reachability across all 6 workflows, sequential workflow transitions with mutual exclusion assertions, direct query transitions, modal triggers, and unauthenticated/authenticated navigation boundaries.
+- Added `frontend/tests/homepage-navigation.spec.js` covering homepage rendering, institutional disclosures, workflow card action reachability across all 6 workflows, single-page application in-app transitions (`page.goBack()`, `window.history.pushState` / `popstate`), modal triggers, and unauthenticated/authenticated navigation boundaries.
 - Added route handlers in `frontend/tests/auth.spec.js` for robust headless test execution.
 - Added consistent `data-testid` attributes across all modal containers (`data-testid="model-comparison-modal"`, `data-testid="in-depth-ocean-modal"`, `data-testid="dataset-manager-modal"`, `data-testid="fisherman-mode-modal"`).
 - Reconciled all 10 wiring items in `docs/frontend-redesign-functional-map.md` with source code and accepted tests, and updated the implementation status.
@@ -68,7 +69,7 @@
 python -m unittest discover -s backend/tests -p "test_*.py"
 ```
 **Result**:
-- Ran 109 tests in 6.534s
+- Ran 109 tests in 8.001s
 - Status: **OK (skipped=2)**
 
 ### 2. Frontend Lint & Production Build
@@ -85,12 +86,11 @@ npm run build
 npx playwright test tests/homepage-navigation.spec.js tests/auth.spec.js
 ```
 **Result**:
-- **16 passed** (100% pass across all 6 workflow card reachability checks, sequential workflow mutual exclusion tests, direct query transition tests, navigation links, and authentication lifecycle).
+- **16 passed** (100% pass across all 6 workflow card reachability checks, sequential in-app SPA history transitions, direct in-app query transitions, navigation links, and authentication lifecycle).
 
 ---
 
-## 6. Files Changed in Phase 12 Corrections 02
-- `frontend/src/App.jsx`: Reset mutually exclusive overlay states (`resetOverlays`) whenever recognized workflow intent is selected.
-- `frontend/src/components/HomePage.jsx`: Qualified runtime badge (`Catalog: Copernicus GLORYS12V1 (Unverified Locally) | Active Runtime: Verified Synthetic ROMS`) and clarified local GLORYS unverified status in Section 4.
-- `frontend/tests/homepage-navigation.spec.js`: Added browser regression tests for sequential workflow navigation (Analysis → Home → Physics) and direct query transitions (/app?workflow=observations → /app?workflow=data).
-- `docs/antigravity-phase-12-report.md`: Removed SOFAR overclaim, updated badge descriptions, and documented Phase 12 Corrections 02.
+## 6. Files Changed in Phase 12 Corrections 03
+- `frontend/src/components/HomePage.jsx`: Labeled Synthetic ROMS as verified local test data (`Configured Catalog: Copernicus GLORYS12V1 (Unverified Locally) | Verified Local Test Data: Synthetic ROMS`).
+- `frontend/tests/homepage-navigation.spec.js`: Updated sequential workflow and direct query transition tests to execute inside the single-page application via `page.goBack()` and `popstate` events without reloading the document.
+- `docs/antigravity-phase-12-report.md`: Updated Phase 12 comprehensive completion report with Corrections 03 details.

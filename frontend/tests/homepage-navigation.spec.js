@@ -198,7 +198,7 @@ test.describe('Public Homepage & Unified Navigation Suite', () => {
   });
 
   test('sequential workflow navigation from homepage resets prior modal state', async ({ page }) => {
-    // 1. Open Analysis workflow from homepage
+    // 1. Open Analysis workflow from homepage (SPA in-app navigation)
     await page.goto('/home');
     const analysisBtn = page.locator('[data-testid="workflow-btn-analysis"]');
     await expect(analysisBtn).toBeVisible();
@@ -210,11 +210,12 @@ test.describe('Public Homepage & Unified Navigation Suite', () => {
     await expect(comparisonModal).toBeVisible({ timeout: 8000 });
     await expect(physicsModal).not.toBeVisible();
 
-    // 2. Return to home portal overview
-    await page.goto('/home');
+    // 2. Return to home portal overview via in-app browser history (popstate without reloading App)
+    await page.goBack();
     await expect(page).toHaveURL(/.*\/home/);
+    await expect(page.locator('[data-testid="public-homepage"]')).toBeVisible({ timeout: 8000 });
 
-    // 3. Open Physics workflow from homepage
+    // 3. Open Physics workflow from homepage in the same App instance
     const physicsBtn = page.locator('[data-testid="workflow-btn-physics"]');
     await expect(physicsBtn).toBeVisible();
     await physicsBtn.click();
@@ -234,8 +235,12 @@ test.describe('Public Homepage & Unified Navigation Suite', () => {
     await expect(drawer).toBeVisible({ timeout: 8000 });
     await expect(datasetModal).not.toBeVisible();
 
-    // 2. Transition directly to data management workflow
-    await page.goto('/app?workflow=data');
+    // 2. In-app query transition in the same document (dispatch history popstate event without page reload)
+    await page.evaluate(() => {
+      window.history.pushState({}, '', '/app?workflow=data');
+      window.dispatchEvent(new window.PopStateEvent('popstate'));
+    });
+
     await expect(datasetModal).toBeVisible({ timeout: 8000 });
     await expect(drawer).not.toBeVisible();
   });
