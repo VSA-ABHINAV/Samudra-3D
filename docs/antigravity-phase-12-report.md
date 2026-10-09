@@ -5,7 +5,7 @@
 - **Phase 12 Redesign Commit**: `7650369e780ed099b47ae40272b479270e2cf526` (`feat(phase-12): redesign frontend with public homepage, unified navigation, and verified workflow routing`)
 - **Phase 12 Style Polish Commit**: `49ebc3e0310fa095a43b355835c67c5e219fb06b` (`style(phase-12): clean up trailing whitespace in HomePage.jsx`)
 - **Phase 12 Report Trail Commit**: `dc62d4ebfbe746ff57da2a6c8e31fc5772ec139e` (`docs(phase-12): update Phase 12 completion report`)
-- **Phase 12 Corrections 01 Commit**: *[Recorded upon commit]* (`fix(phase-12): qualify provenance copy, wire workflow card reachability, and reconcile functional map`)
+- **Phase 12 Corrections 01 Commit**: `00b7d9980d216f40445d4719c878939b5fa2fbf8` (`fix(phase-12): qualify provenance copy, wire workflow card reachability, and reconcile functional map`)
 
 ---
 
