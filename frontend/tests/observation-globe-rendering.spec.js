@@ -242,6 +242,44 @@ test.describe('Observation Drawer & Marker Rendering Regression Test', () => {
         }
       })
     );
+
+    await page.route('**/api/collocation/profile/*', (route) =>
+      route.fulfill({
+        json: {
+          profile_id: 'ARGO_2902145',
+          lat: 12.48,
+          lon: 82.03,
+          time: '2025-01-04T06:00:00Z',
+          depths: [0.5, 10, 50, 100, 500, 1000, 2000],
+          observed_temperature: [29.1, 28.8, 28.2, 26.5, 12.0, 7.5, 3.2],
+          model_temperature: [28.9, 28.7, 28.0, 26.1, 11.8, 7.4, 3.1],
+          observed_salinity: [34.5, 34.6, 34.8, 35.1, 35.0, 34.9, 34.8],
+          model_salinity: [34.4, 34.5, 34.7, 35.0, 34.9, 34.8, 34.7],
+          metrics_temperature: { bias: -0.15, mae: 0.18, rmse: 0.22, pearson: 0.998, health: 'EXCELLENT' },
+          metrics_salinity: { bias: -0.08, mae: 0.09, rmse: 0.11, pearson: 0.995, health: 'EXCELLENT' },
+          spatial_distance_km: 1.2
+        }
+      })
+    );
+
+    await page.route('**/api/collocation/glider/*', (route) =>
+      route.fulfill({
+        json: {
+          glider_id: 'GLIDER_REAL_INCOIS_SG02',
+          mission_name: 'Arabian Sea Deep Glider',
+          waypoints_count: 3,
+          metrics_temperature: { bias: -0.21, mae: 0.25, rmse: 0.31, pearson: 0.992, health: 'GOOD' },
+          metrics_salinity: { bias: -0.10, mae: 0.12, rmse: 0.15, pearson: 0.988, health: 'GOOD' },
+          spatial_distance_km: 2.5
+        }
+      })
+    );
+
+    await page.route('**/api/collocation/health*', (route) =>
+      route.fulfill({
+        json: { status: 'HEALTHY', domain_verified: true, latency_ms: 12.4 }
+      })
+    );
   });
 
   test('1920x1080: Populated Argo and Glider layers render 3D spherical markers without viewport occlusions', async ({ page }) => {
@@ -407,6 +445,128 @@ test.describe('Observation Drawer & Marker Rendering Regression Test', () => {
     expect(bothOffFrame.center.brightness).toBeGreaterThan(20);
     expect(bothOffFrame.tl.brightness).toBeLessThan(50);
     expect(bothOffFrame.tr.brightness).toBeLessThan(50);
+
+    expect(errors).toEqual([]);
+  });
+
+  test('1920x1080: Observation Fleet -> Select Platform -> Compare Model workflow renders clean 3D globe without viewport rectangle artifacts', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    const sampleScreenshotFrame = async (screenshotBuffer) => {
+      return await page.evaluate(async (dataUrl) => {
+        const img = new window.Image();
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+          img.src = dataUrl;
+        });
+        const scratch = document.createElement('canvas');
+        scratch.width = img.width;
+        scratch.height = img.height;
+        const ctx = scratch.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+
+        const getPixel = (x, y) => {
+          const p = ctx.getImageData(x, y, 1, 1).data;
+          return {
+            r: p[0],
+            g: p[1],
+            b: p[2],
+            a: p[3],
+            brightness: (p[0] + p[1] + p[2]) / 3
+          };
+        };
+
+        const tl = getPixel(40, 40);
+        const tr = getPixel(img.width - 450, 40);
+        const bl = getPixel(40, img.height - 120);
+        const br = getPixel(img.width - 450, img.height - 120);
+        const center = getPixel(Math.floor(img.width * 0.45), Math.floor(img.height * 0.45));
+        return { width: img.width, height: img.height, tl, tr, bl, br, center };
+      }, `data:image/png;base64,${screenshotBuffer.toString('base64')}`);
+    };
+
+    // 1. Set 1920x1080 desktop viewport and navigate to /app with observations workflow
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto('/app?workflow=observations');
+
+    await expect(page.locator('#workspace')).toBeVisible({ timeout: 15000 });
+    const drawer = page.locator('[data-testid="observation-drawer"]');
+    await expect(drawer).toBeVisible({ timeout: 10000 });
+
+    // 2. Toggle ARGO and GLIDERS layers ON
+    const argoBtn = page.locator('[data-testid="bottombar-argo-btn"]');
+    const glidersBtn = page.locator('[data-testid="bottombar-gliders-btn"]');
+    await expect(argoBtn).toBeVisible();
+    await expect(glidersBtn).toBeVisible();
+
+    if ((await argoBtn.getAttribute('aria-pressed')) !== 'true') {
+      await argoBtn.click();
+    }
+    if ((await glidersBtn.getAttribute('aria-pressed')) !== 'true') {
+      await glidersBtn.click();
+    }
+    await expect(argoBtn).toHaveAttribute('aria-pressed', 'true');
+    await expect(glidersBtn).toHaveAttribute('aria-pressed', 'true');
+
+    // 3. Select Argo platform from drawer
+    const firstArgoCard = drawer.locator('.platform-item-card').first();
+    await expect(firstArgoCard).toBeVisible();
+    await firstArgoCard.click();
+
+    // 4. Click Compare Model button on selected Argo card
+    const compareBtn = firstArgoCard.locator('[data-testid="platform-compare-btn"]');
+    await expect(compareBtn).toBeVisible();
+    await compareBtn.click();
+
+    // 5. Verify Model Comparison Suite modal opens while layers remain active
+    const comparisonModal = page.locator('[data-testid="model-comparison-modal"]');
+    await expect(comparisonModal).toBeVisible({ timeout: 8000 });
+
+    await page.waitForTimeout(600);
+    const screenshotArgo = await page.screenshot({
+      path: path.join(evidenceDir, '07-observation-compare-model-argo-active.png')
+    });
+    const argoFrame = await sampleScreenshotFrame(screenshotArgo);
+
+    expect(argoFrame.width).toBe(1920);
+    expect(argoFrame.height).toBe(1080);
+    // Space background corners remain dark (no viewport-covering quad/rectangle)
+    expect(argoFrame.tl.brightness).toBeLessThan(50);
+    expect(argoFrame.tr.brightness).toBeLessThan(50);
+    expect(argoFrame.bl.brightness).toBeLessThan(50);
+
+    // 6. Close comparison modal
+    const closeModalBtn = page.locator('[data-testid="close-comparison-modal-btn"]');
+    await closeModalBtn.click();
+    await expect(comparisonModal).not.toBeVisible();
+
+    // 7. Filter drawer to Gliders and select Glider platform
+    await drawer.locator('[data-testid="filter-glider"]').click();
+    const firstGliderCard = drawer.locator('.platform-item-card').first();
+    await expect(firstGliderCard).toBeVisible();
+    await firstGliderCard.click();
+
+    // 8. Click Compare Model on Glider card
+    const gliderCompareBtn = firstGliderCard.locator('[data-testid="platform-compare-btn"]');
+    await expect(gliderCompareBtn).toBeVisible();
+    await gliderCompareBtn.click();
+
+    await expect(comparisonModal).toBeVisible({ timeout: 8000 });
+    await page.waitForTimeout(600);
+
+    const screenshotGlider = await page.screenshot({
+      path: path.join(evidenceDir, '08-observation-compare-model-glider-active.png')
+    });
+    const gliderFrame = await sampleScreenshotFrame(screenshotGlider);
+
+    expect(gliderFrame.tl.brightness).toBeLessThan(50);
+    expect(gliderFrame.tr.brightness).toBeLessThan(50);
+
+    // Close modal
+    await closeModalBtn.click();
+    await expect(comparisonModal).not.toBeVisible();
 
     expect(errors).toEqual([]);
   });

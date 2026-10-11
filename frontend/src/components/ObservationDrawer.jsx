@@ -235,6 +235,7 @@ export default function ObservationDrawer({
                 <div className="card-actions flex items-center gap-2 mt-2 pt-2 border-t border-slate-800/80">
                   <button
                     type="button"
+                    data-testid="platform-profile-btn"
                     className="action-btn-secondary text-[10px] py-1 px-2 flex-1"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -245,6 +246,7 @@ export default function ObservationDrawer({
                   </button>
                   <button
                     type="button"
+                    data-testid="platform-compare-btn"
                     className="action-btn-primary text-[10px] py-1 px-2 flex-1"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -255,6 +257,7 @@ export default function ObservationDrawer({
                   </button>
                   <button
                     type="button"
+                    data-testid="platform-focus-btn"
                     className="action-btn-secondary text-[10px] py-1 px-2"
                     title="Focus on Globe"
                     onClick={(e) => {
