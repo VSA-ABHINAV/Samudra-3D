@@ -76,3 +76,24 @@ npx playwright test tests/globe-box.spec.js tests/observation-globe-rendering.sp
 - **Render Backend Deployment**:
   - Health endpoint: `https://samudra-3d-backend.onrender.com/api/health` (HTTP 200).
   - Status: `healthy`, `dataset_loaded: true`, serving active array `/opt/render/project/src/backend/sample_data/model_indian_ocean.nc`.
+
+---
+
+## 5. File Cleanup Inventory
+
+In accordance with instruction item 6, an audit of repository and related project task files was conducted:
+- **Files Preserved**:
+  - All source code, unit and end-to-end tests, build and tooling configurations.
+  - All formal phase reports and accepted Codex reviews (`docs/codex-*.md`, `docs/antigravity-*-report.md`).
+  - Active test runner and production deployment evidence screenshots in `docs/evidence/` across all phases.
+  - User-provided defect screenshots in `D:\Samudra 3D\bug\` (`Screenshot 2026-10-09 171642.png` and `Screenshot 2026-10-09 171702.png`).
+  - Unrelated untracked working-tree review documents and `.codex-worktrees/`.
+- **Files Removed**:
+  - `docs/evidence/observation-globe-fix/01-globe-initial-1920x1080.png`: Obsolete preliminary screenshot from an earlier draft run, superseded by active test runner output `01-argo-gliders-active-drawer-open.png`.
+  - `docs/evidence/observation-globe-fix/02-observation-drawer-open.png`: Obsolete preliminary screenshot, superseded by `01-argo-gliders-active-drawer-open.png`.
+  - `docs/evidence/observation-globe-fix/03-argo-gliders-active-drawer-open.png`: Duplicate preliminary run file, superseded by `01-argo-gliders-active-drawer-open.png`.
+  - `docs/evidence/observation-globe-fix/04-markers-active-drawer-closed.png`: Obsolete preliminary run file, superseded by `02-both-layers-active-drawer-closed.png`.
+  - `docs/evidence/observation-globe-fix/05-gliders-only-drawer-open.png`: Obsolete preliminary run file, superseded by `03-gliders-only-active.png`.
+  - `docs/evidence/observation-globe-fix/06-argo-only-drawer-open.png`: Obsolete preliminary run file, superseded by `04-argo-only-active.png`.
+  - `frontend/tests/production-deploy-smoke.spec.js`: Temporary live deployment smoke script used to verify public production URL and capture `production-deployed-1920x1080.png`; removed to avoid test suite duplication (permanent regression coverage resides in `observation-globe-rendering.spec.js`).
+- **No recursive folder deletions or indiscriminate workspace clearing was performed.**
