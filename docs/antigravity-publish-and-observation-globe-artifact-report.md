@@ -66,8 +66,13 @@ npx playwright test tests/globe-box.spec.js tests/observation-globe-rendering.sp
 
 ## 4. Git Integration & Deployment Details
 
-- **Fast-Forward Integration**: Branch `release/reviewed-core-2026-09-29` is 48 commits ahead of `origin/main` (`117fff4`), with zero divergent commits on remote `main`.
-- **Merge Base**: `117fff4ccdf372edb6784a4a0d5674eaac72f628` (clean fast-forward possible without force-push).
-- **Production Target**: `origin/main`.
-- **Render Backend**: `https://samudra-3d-backend.onrender.com/api/health` (verified healthy, HTTP 200).
-- **Vercel Frontend**: `https://samudra-3d.vercel.app` (verified HTTP 200).
+- **Fast-Forward Integration**: Branch `release/reviewed-core-2026-09-29` was merged and pushed to `origin/main` as a clean fast-forward without force-pushing.
+- **Published Commit**: `7414847f5fe656fb47659b7306b5b1bedb9e0e84` (includes all accepted Phases 05–12 commits and the observation/comparison regression test).
+- **Vercel Frontend Deployment**:
+  - Live URL: `https://samudra-3d.vercel.app` (HTTP 200).
+  - Deployed assets: `/assets/index-DcnkOpPS.js` and `/assets/index-BrfAsP68.css` (HTTP 200).
+  - Production verification: Tested live site with Playwright at 1920×1080. The Observation Fleet -> Select Platform -> Compare Model path was exercised against live Render backend data, and screenshot analysis verified zero viewport occlusions or rectangle defects.
+  - Production screenshot: `docs/evidence/observation-globe-fix/production-deployed-1920x1080.png`.
+- **Render Backend Deployment**:
+  - Health endpoint: `https://samudra-3d-backend.onrender.com/api/health` (HTTP 200).
+  - Status: `healthy`, `dataset_loaded: true`, serving active array `/opt/render/project/src/backend/sample_data/model_indian_ocean.nc`.
