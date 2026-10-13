@@ -76,6 +76,19 @@ npx playwright test tests/globe-box.spec.js tests/observation-globe-rendering.sp
 - **Render Backend Deployment**:
   - Health endpoint: `https://samudra-3d-backend.onrender.com/api/health` (HTTP 200).
   - Status: `healthy`, `dataset_loaded: true`, serving active array `/opt/render/project/src/backend/sample_data/model_indian_ocean.nc`.
+- **Live Production Collocation Workflow Execution**:
+  - Tested live site at 1920×1080: navigated to `https://samudra-3d.vercel.app/app?workflow=observations`, loaded Observation Fleet from live Render backend, selected `Argo Float 2902210 (South Indian Ocean - INCOIS Reference Sample)` (11.25°N, 88.50°E), clicked **Compare Model**, and executed **Run Model Prediction Job**.
+  - **Result**: Job executed successfully against live backend in 1324 ms via 4D trilinear affine interpolation.
+  - **Live Scorecard Metrics**:
+    - Mean Bias Error (MBE): `+0.7221 °C` (Over-prediction)
+    - RMSE: `1.3307 °C`
+    - Mean Absolute Error (MAE): `0.9029 °C`
+    - Pearson Correlation (R): `+0.9933` (High Stratification Match)
+    - Health Grade: `ACCEPTABLE` across 14 depth levels (0m to 1984m seabed)
+    - Grid Spatial Offset: `12.35 km` (nearest ROMS cell)
+    - Curves: Rendered both dual curves (CTD sensor vs ROMS 3D model) and Depth Residual Profile (Δ = Model - Obs).
+  - **Visual Globe State**: 3D globe rendered with zero viewport occlusions, solid quads, or clipping artifacts.
+  - Production screenshot: `docs/evidence/observation-globe-fix/production-deployed-1920x1080.png`.
 
 ---
 
