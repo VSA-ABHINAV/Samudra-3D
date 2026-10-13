@@ -67,7 +67,8 @@ npx playwright test tests/globe-box.spec.js tests/observation-globe-rendering.sp
 ## 4. Git Integration & Deployment Details
 
 - **Fast-Forward Integration**: Branch `release/reviewed-core-2026-09-29` was merged and pushed to `origin/main` as a clean fast-forward without force-pushing.
-- **Published Commit**: `82f74429ddb53bf4301b3ff81c2ec48cef7b34f5` (includes all accepted Phases 05–12 commits, observation/comparison regression test, and cleanup inventory).
+- **Code & Regression Release Commit**: `82f74429ddb53bf4301b3ff81c2ec48cef7b34f5` (includes all accepted Phases 05–12 commits, observation/comparison regression test, and cleanup inventory).
+- **Final Pushed Production Commit**: `09d7a24f2406041ca7cec0af03b16bc056dcbf54` (incorporates verified live production deployment telemetry, 4D collocation scorecard results, and complete verification evidence).
 - **Vercel Frontend Deployment**:
   - Live URL: `https://samudra-3d.vercel.app` (HTTP 200).
   - Deployed assets: `/assets/index-DcnkOpPS.js` and `/assets/index-BrfAsP68.css` (HTTP 200).
