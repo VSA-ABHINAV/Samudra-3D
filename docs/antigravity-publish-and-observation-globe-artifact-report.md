@@ -54,6 +54,14 @@ npx playwright test tests/globe-box.spec.js tests/observation-globe-rendering.sp
   - 1920×1080 populated layer rendering without viewport occlusions.
   - 1920×1080 Observation Fleet -> Select Platform -> Compare Model workflow without viewport rectangle artifacts.
 
+### 5. Backend Unit & Contract Test Suite
+```powershell
+python -m unittest discover -s backend/tests -p "test_*.py"
+```
+**Result**: **Ran 109 tests in 8.747s (OK, skipped=2, 0 failures)**:
+- 107 passed tests covering analytical affine 4D trilinear interpolation, anomaly fields, collocation service, real local Argo & Glider ingestion, buoy observation contracts, download manager process tree safety & transaction rollbacks, phase 11 cleanup, and API authentication.
+- 2 skipped tests correspond to genuine Copernicus GLORYS12V1 reanalysis NetCDF catalog ingestion, truthfully skipped due to offline integration gap (`OFFLINE_INTEGRATION_GAP`).
+
 ---
 
 ## 3. Honest Scientific Data Status
@@ -68,7 +76,7 @@ npx playwright test tests/globe-box.spec.js tests/observation-globe-rendering.sp
 
 - **Fast-Forward Integration**: Branch `release/reviewed-core-2026-09-29` was merged and pushed to `origin/main` as a clean fast-forward without force-pushing.
 - **Code & Regression Release Commit**: `82f74429ddb53bf4301b3ff81c2ec48cef7b34f5` (includes all accepted Phases 05–12 commits, observation/comparison regression test, and cleanup inventory).
-- **Final Pushed Production Commit**: `09d7a24f2406041ca7cec0af03b16bc056dcbf54` (incorporates verified live production deployment telemetry, 4D collocation scorecard results, and complete verification evidence).
+- **Production Verification & Telemetry Commit**: `09d7a24f2406041ca7cec0af03b16bc056dcbf54` (incorporates verified live production deployment telemetry, 4D collocation scorecard results, and complete verification evidence).
 - **Vercel Frontend Deployment**:
   - Live URL: `https://samudra-3d.vercel.app` (HTTP 200).
   - Deployed assets: `/assets/index-DcnkOpPS.js` and `/assets/index-BrfAsP68.css` (HTTP 200).
